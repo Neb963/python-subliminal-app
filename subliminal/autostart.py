@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+from pathlib import Path
+
+APP_ID = "io.github.neb963.Subliminal"
+DESKTOP_FILE = "io.github.neb963.Subliminal.desktop"
+
+
+def autostart_path() -> Path:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return config_home / "autostart" / DESKTOP_FILE
+
+
+def _launcher_command() -> str:
+    """Return a stable launcher for the desktop autostart entry."""
+    explicit = os.environ.get("SUBLIMINAL_EXECUTABLE")
+    if explicit:
+        return str(Path(explicit).expanduser().resolve())
+    installed = shutil.which("subliminal")
+    if installed:
+        return installed
+    # Development fallback. This is mainly useful when the package is installed
+    # into the current interpreter's site-packages.
+    return f"{sys.executable} -m subliminal"
+
+
+def set_autostart(enabled: bool) -> None:
+    path = autostart_path()
+    if not enabled:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    command = _launcher_command()
+    content = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Subliminal\n"
+        "Comment=Text and image overlay scheduler\n"
+        f"Exec={command} --background\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
