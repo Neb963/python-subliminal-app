@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass
 
 from .gtk_runtime import Gdk, GLib, Gtk, Pango
 from .media import MediaAsset, MediaCache
-from .model import ImageLayer, Layer, Scene, TextLayer, calculate_position
+from .model import (
+    ImageLayer,
+    Layer,
+    Scene,
+    TextLayer,
+    calculate_position,
+    random_top_left,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -52,7 +60,7 @@ class RenderedLayer:
 
 
 class SceneView(Gtk.Fixed):
-    """Renders a Scene using actual GTK widgets; used by both overlay and preview."""
+    """Renders a Scene using actual GTK widgets; used by overlay and preview."""
 
     def __init__(
         self,
@@ -70,12 +78,30 @@ class SceneView(Gtk.Fixed):
         self._layers: list[RenderedLayer] = []
         self._animations: list[AnimatedPicture] = []
         self._layout_pending = False
+        self._rng = random.Random()
+        # layer id -> stable 0..1 samples for the current flash. A new pair is
+        # generated on every repetition, then reused after the surface maps.
+        self._flash_random: dict[str, tuple[float, float]] = {}
+
         self.add_css_class("subliminal-scene")
         self.set_hexpand(True)
         self.set_vexpand(True)
         self.connect("notify::width", self._on_size_changed)
         self.connect("notify::height", self._on_size_changed)
         self._build()
+
+    def prepare_flash(self, width: float, height: float) -> None:
+        """Choose random positions and synchronously lay out this repetition."""
+        self._flash_random = {
+            rendered.model.id: (self._rng.random(), self._rng.random())
+            for rendered in self._layers
+            if rendered.model.position.randomize
+        }
+        self._layout_for_bounds(width, height)
+
+    def reapply_flash_layout(self, width: float, height: float) -> None:
+        """Reapply the same repetition after GTK allocates the mapped surface."""
+        self._layout_for_bounds(width, height)
 
     def start_animations(self) -> None:
         for animation in self._animations:
@@ -118,6 +144,7 @@ class SceneView(Gtk.Fixed):
         desc.set_absolute_size(max(1, layer.font_size_px * self.scale) * Pango.SCALE)
         desc.set_weight(Pango.Weight.BOLD if layer.bold else Pango.Weight.NORMAL)
         desc.set_style(Pango.Style.ITALIC if layer.italic else Pango.Style.NORMAL)
+
         attrs = Pango.AttrList()
         attrs.insert(Pango.attr_font_desc_new(desc))
         if layer.underline:
@@ -156,24 +183,42 @@ class SceneView(Gtk.Fixed):
         self._layout_pending = False
         width = self.get_width()
         height = self.get_height()
+        if width > 1 and height > 1:
+            self._layout_for_bounds(width, height)
+        return GLib.SOURCE_REMOVE
+
+    def _layout_for_bounds(self, width: float, height: float) -> None:
         if width <= 1 or height <= 1:
-            return GLib.SOURCE_REMOVE
+            return
+
         for rendered in self._layers:
             widget = rendered.widget
             _, natural_w, _, _ = widget.measure(Gtk.Orientation.HORIZONTAL, -1)
             _, natural_h, _, _ = widget.measure(Gtk.Orientation.VERTICAL, natural_w)
             item_w = max(1, natural_w)
             item_h = max(1, natural_h)
-            x, y = calculate_position(
-                rendered.model.position,
-                width,
-                height,
-                item_w,
-                item_h,
-                self.scale,
-            )
+
+            random_pair = self._flash_random.get(rendered.model.id)
+            if rendered.model.position.randomize and random_pair is not None:
+                x, y = random_top_left(
+                    width,
+                    height,
+                    item_w,
+                    item_h,
+                    random_pair[0],
+                    random_pair[1],
+                    margin=max(8.0, 8.0 * self.scale),
+                )
+            else:
+                x, y = calculate_position(
+                    rendered.model.position,
+                    width,
+                    height,
+                    item_w,
+                    item_h,
+                    self.scale,
+                )
             self.move(widget, x, y)
-        return GLib.SOURCE_REMOVE
 
     @staticmethod
     def _layer_label(layer: Layer) -> str:
