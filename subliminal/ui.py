@@ -708,55 +708,95 @@ class TimingPage(Gtk.Box):
         self.controller = controller
         self._loading = False
         self.set_margin_top(24); self.set_margin_start(24); self.set_margin_end(24)
+
+        intro = Gtk.Label(
+            label="Flash length is measured in real display frames, not arbitrary milliseconds."
+        )
+        intro.set_xalign(0.0)
+        intro.set_wrap(True)
+        intro.add_css_class("dim-label")
+        self.append(intro)
+
         grid = Gtk.Grid(column_spacing=16, row_spacing=12)
         self.append(grid)
-        self.interval = Gtk.SpinButton.new_with_range(0.1, 3600, 0.1)
-        self.interval.set_digits(1)
-        self.duration = Gtk.SpinButton.new_with_range(1, 60000, 1)
+
+        self.refresh_value = Gtk.Label()
+        self.refresh_value.set_xalign(0.0)
+        self.break_seconds = Gtk.SpinButton.new_with_range(0.1, 3600, 0.1)
+        self.break_seconds.set_digits(1)
+        self.visible_frames = Gtk.SpinButton.new_with_range(1, 120, 1)
         self.selection = Gtk.DropDown.new_from_strings(["Random", "Sequential"])
-        self.interval.connect("value-changed", self._changed)
-        self.duration.connect("value-changed", self._changed)
+
+        self.break_seconds.connect("value-changed", self._changed)
+        self.visible_frames.connect("value-changed", self._changed)
         self.selection.connect("notify::selected", self._changed)
-        self._attach(grid, 0, "Flash every (seconds)", self.interval)
-        self._attach(grid, 1, "Show for (milliseconds)", self.duration)
-        self._attach(grid, 2, "Scene order", self.selection)
+
+        self._attach(grid, 0, "Display refresh", self.refresh_value)
+        self._attach(grid, 1, "Visible for (frames)", self.visible_frames)
+        self._attach(grid, 2, "Break after flash (seconds)", self.break_seconds)
+        self._attach(grid, 3, "Scene order", self.selection)
+
         self.hint = Gtk.Label()
         self.hint.set_xalign(0.0)
         self.hint.set_wrap(True)
+        self.hint.set_selectable(True)
         self.hint.add_css_class("dim-label")
-        grid.attach(self.hint, 0, 3, 2, 1)
+        grid.attach(self.hint, 0, 4, 2, 1)
 
     def _attach(self, grid, row, label, widget):
-        lab = Gtk.Label(label=label); lab.set_xalign(1.0)
-        grid.attach(lab, 0, row, 1, 1); grid.attach(widget, 1, row, 1, 1)
+        lab = Gtk.Label(label=label)
+        lab.set_xalign(1.0)
+        grid.attach(lab, 0, row, 1, 1)
+        grid.attach(widget, 1, row, 1, 1)
 
     def refresh(self) -> None:
         self._loading = True
         cfg = self.controller.config.schedule
-        self.interval.set_value(cfg.interval_ms / 1000.0)
-        self.duration.set_value(cfg.duration_ms)
+        self.break_seconds.set_value(cfg.break_ms / 1000.0)
+        self.visible_frames.set_value(cfg.visible_frames)
         self.selection.set_selected(0 if cfg.selection == "random" else 1)
         self._loading = False
+
         monitors = self.controller.overlay.monitors()
-        refresh = next((m.refresh_hz for m in monitors if m.refresh_hz), None)
-        if refresh:
-            frame_ms = 1000.0 / refresh
-            frames = cfg.duration_ms / frame_ms
-            self.hint.set_label(f"Primary detected refresh ≈ {refresh:.1f} Hz ({frame_ms:.2f} ms/frame). Current flash is ≈ {frames:.1f} frames. Exact sub-frame timing is not guaranteed.")
-        else:
-            self.hint.set_label("Flash duration is requested in milliseconds; actual visibility is constrained by compositor scheduling and display refresh.")
+        refreshes = [(m.connector, m.refresh_hz) for m in monitors if m.refresh_hz]
+        if not refreshes:
+            reference_hz = 60.0
+            self.refresh_value.set_label("Not detected (60 Hz reference)")
+            ms = cfg.visible_frames * 1000.0 / reference_hz
+            cycles = cfg.break_ms * reference_hz / 1000.0
+            self.hint.set_label(
+                f"{cfg.visible_frames} frame(s) at 60 Hz ≈ {ms:.1f} ms visible. "
+                f"A {cfg.break_ms / 1000.0:.1f} s break is ≈ {cycles:.0f} refresh cycles. "
+                "The actual overlay uses the monitor frame clock when available."
+            )
+            return
+
+        self.refresh_value.set_label(
+            ", ".join(f"{connector}: {hz:.1f} Hz" for connector, hz in refreshes)
+        )
+        lines = []
+        for connector, hz in refreshes:
+            frame_ms = 1000.0 / hz
+            visible_ms = cfg.visible_frames * frame_ms
+            break_cycles = cfg.break_ms * hz / 1000.0
+            lines.append(
+                f"{connector}: 1 frame ≈ {frame_ms:.2f} ms; "
+                f"{cfg.visible_frames} frame(s) ≈ {visible_ms:.1f} ms; "
+                f"break ≈ {break_cycles:.0f} refresh cycles."
+            )
+        if len(refreshes) > 1:
+            lines.append(
+                "With mixed-refresh monitors the same frame count is applied independently "
+                "to each monitor, so wall-clock flash length differs by refresh rate."
+            )
+        self.hint.set_label("\n".join(lines))
 
     def _changed(self, *_args) -> None:
         if self._loading:
             return
         cfg = self.controller.config.schedule
-        cfg.interval_ms = max(100, round(self.interval.get_value() * 1000))
-        cfg.duration_ms = self.duration.get_value_as_int()
-        if cfg.duration_ms >= cfg.interval_ms:
-            cfg.duration_ms = max(1, cfg.interval_ms - 1)
-            self._loading = True
-            self.duration.set_value(cfg.duration_ms)
-            self._loading = False
+        cfg.break_ms = max(100, round(self.break_seconds.get_value() * 1000))
+        cfg.visible_frames = max(1, self.visible_frames.get_value_as_int())
         cfg.selection = "random" if self.selection.get_selected() == 0 else "sequential"
         self.controller.config_changed("timing")
         self.refresh()
