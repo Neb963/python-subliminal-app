@@ -419,7 +419,7 @@ class EditorPage(Gtk.Box):
         row = 0
 
         self.text_name = Gtk.Entry()
-        self.text_name.connect("changed", self._update_text)
+        self.text_name.connect("changed", self._update_text_name)
         row = self._attach(grid, row, "Name", self.text_name)
 
         self.text_enabled = Gtk.CheckButton(label="Enabled")
@@ -469,7 +469,7 @@ class EditorPage(Gtk.Box):
         row = 0
 
         self.image_name = Gtk.Entry()
-        self.image_name.connect("changed", self._update_image)
+        self.image_name.connect("changed", self._update_image_name)
         row = self._attach(grid, row, "Name", self.image_name)
 
         self.image_enabled = Gtk.CheckButton(label="Enabled")
@@ -913,6 +913,32 @@ class EditorPage(Gtk.Box):
         position.offset_x = controls["ox"].get_value_as_int()
         position.offset_y = controls["oy"].get_value_as_int()
 
+    def _update_text_name(self, entry) -> None:
+        if self._loading:
+            return
+        layer = self._find_layer(self._layer_id)
+        if not isinstance(layer, TextLayer):
+            return
+        value = entry.get_text().strip()
+        if not value or value == layer.name:
+            return
+        layer.name = value
+        self.controller.config_changed("metadata")
+        self._refresh_layer_label()
+
+    def _update_image_name(self, entry) -> None:
+        if self._loading:
+            return
+        layer = self._find_layer(self._layer_id)
+        if not isinstance(layer, ImageLayer):
+            return
+        value = entry.get_text().strip()
+        if not value or value == layer.name:
+            return
+        layer.name = value
+        self.controller.config_changed("metadata")
+        self._refresh_layer_label()
+
     def _update_text(self, *_args) -> None:
         if self._loading:
             return
@@ -920,9 +946,6 @@ class EditorPage(Gtk.Box):
         if not isinstance(layer, TextLayer):
             return
 
-        name = self.text_name.get_text().strip()
-        if name:
-            layer.name = name
         start, end = self.text_view.get_buffer().get_bounds()
         layer.text = self.text_view.get_buffer().get_text(start, end, True)
         layer.enabled = self.text_enabled.get_active()
@@ -952,9 +975,6 @@ class EditorPage(Gtk.Box):
         if not isinstance(layer, ImageLayer):
             return
 
-        name = self.image_name.get_text().strip()
-        if name:
-            layer.name = name
         layer.enabled = self.image_enabled.get_active()
         layer.width_px = (
             None if self.auto_width.get_active()
