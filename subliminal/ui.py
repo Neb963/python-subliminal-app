@@ -340,9 +340,15 @@ class ContentPage(Gtk.Box):
         return scale
 
     def _position_controls(self, grid, row: int, callback):
+        randomize = Gtk.CheckButton(label="New position on every flash")
+        grid.attach(Gtk.Label(label="Random position", xalign=1.0), 0, row, 1, 1)
+        grid.attach(randomize, 1, row, 1, 1)
+        row += 1
+
         anchor = Gtk.DropDown.new_from_strings(list(ANCHORS))
         anchor.connect("notify::selected", callback)
         row = self._attach(grid, row, "Anchor", anchor)
+
         x = Gtk.SpinButton.new_with_range(0, 100, 0.1)
         y = Gtk.SpinButton.new_with_range(0, 100, 0.1)
         x.connect("value-changed", callback)
@@ -351,6 +357,7 @@ class ContentPage(Gtk.Box):
         xy.append(Gtk.Label(label="X")); xy.append(x)
         xy.append(Gtk.Label(label="Y")); xy.append(y)
         row = self._attach(grid, row, "Position (%)", xy)
+
         ox = Gtk.SpinButton.new_with_range(-10000, 10000, 1)
         oy = Gtk.SpinButton.new_with_range(-10000, 10000, 1)
         ox.connect("value-changed", callback)
@@ -359,7 +366,27 @@ class ContentPage(Gtk.Box):
         offsets.append(Gtk.Label(label="X")); offsets.append(ox)
         offsets.append(Gtk.Label(label="Y")); offsets.append(oy)
         row = self._attach(grid, row, "Offset (px)", offsets)
-        return {"anchor": anchor, "x": x, "y": y, "ox": ox, "oy": oy}, row
+
+        controls = {
+            "random": randomize,
+            "anchor": anchor,
+            "x": x,
+            "y": y,
+            "ox": ox,
+            "oy": oy,
+        }
+
+        def on_random_toggled(button):
+            self._set_fixed_position_sensitive(controls, not button.get_active())
+            callback(button)
+
+        randomize.connect("toggled", on_random_toggled)
+        return controls, row
+
+    @staticmethod
+    def _set_fixed_position_sensitive(controls: dict, sensitive: bool) -> None:
+        for key in ("anchor", "x", "y", "ox", "oy"):
+            controls[key].set_sensitive(sensitive)
 
     def refresh(self) -> None:
         previous_scene = self._scene_id
@@ -462,6 +489,8 @@ class ContentPage(Gtk.Box):
             self._loading = False
 
     def _load_position(self, controls: dict, position) -> None:
+        controls["random"].set_active(position.randomize)
+        self._set_fixed_position_sensitive(controls, not position.randomize)
         controls["anchor"].set_selected(ANCHORS.index(position.anchor))
         controls["x"].set_value(position.x * 100)
         controls["y"].set_value(position.y * 100)
@@ -469,6 +498,7 @@ class ContentPage(Gtk.Box):
         controls["oy"].set_value(position.offset_y)
 
     def _read_position(self, controls: dict, position) -> None:
+        position.randomize = controls["random"].get_active()
         position.anchor = ANCHORS[controls["anchor"].get_selected()]
         position.x = controls["x"].get_value() / 100.0
         position.y = controls["y"].get_value() / 100.0
