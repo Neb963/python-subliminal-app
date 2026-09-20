@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from .autostart import APP_ID, set_autostart
-from .config import ConfigStore
+from .config import ConfigImportError, ConfigStore, export_config, import_config
 from .gtk_runtime import Gdk, GLib, Gtk
 from .model import AppConfig, Scene, normalize_config
 from .overlay import OverlayManager
@@ -103,6 +104,27 @@ class AppController:
             self.scheduler.start(immediate=False)
         elif kind == "timing" and self.scheduler.running:
             self.scheduler.reload_config()
+
+    def export_to(self, path: Path) -> None:
+        export_config(self.config, path)
+
+    def import_from(self, path: Path) -> None:
+        imported = import_config(path)
+        was_running = self.scheduler.running
+        if was_running:
+            self.scheduler.pause()
+        self.overlay.cancel_flash()
+        self.config = imported
+        self.store.save(self.config)
+        self.set_autostart(self.config.autostart)
+        if self.overlay.windows:
+            self.overlay.sync_monitors()
+            self.overlay.rebuild_scenes()
+        if self.window is not None:
+            self.window.refresh_all()
+            self.window.show_warning(None)
+        if was_running:
+            self.scheduler.start(immediate=False)
 
     def set_autostart(self, enabled: bool) -> None:
         try:
