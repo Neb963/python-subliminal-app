@@ -9,13 +9,18 @@ from .media import MediaAsset, MediaCache
 from .model import (
     ImageLayer,
     Layer,
+    Rect,
     Scene,
     TextLayer,
     calculate_position,
-    random_top_left,
+    choose_non_overlapping_top_left,
 )
 
 LOG = logging.getLogger(__name__)
+
+RANDOM_CANDIDATES = 64
+RANDOM_SPACING_PX = 16.0
+RANDOM_MARGIN_PX = 12.0
 
 
 class AnimatedPicture(Gtk.Picture):
@@ -79,9 +84,7 @@ class SceneView(Gtk.Fixed):
         self._animations: list[AnimatedPicture] = []
         self._layout_pending = False
         self._rng = random.Random()
-        # layer id -> stable 0..1 samples for the current flash. A new pair is
-        # generated on every repetition, then reused after the surface maps.
-        self._flash_random: dict[str, tuple[float, float]] = {}
+        self._random_candidates: dict[str, list[tuple[float, float]]] = {}
 
         self.add_css_class("subliminal-scene")
         self.set_hexpand(True)
@@ -91,16 +94,12 @@ class SceneView(Gtk.Fixed):
         self._build()
 
     def prepare_flash(self, width: float, height: float) -> None:
-        """Choose random positions and synchronously lay out this repetition."""
-        self._flash_random = {
-            rendered.model.id: (self._rng.random(), self._rng.random())
-            for rendered in self._layers
-            if rendered.model.position.randomize
-        }
+        """Reroll random layers once, then synchronously lay out this repetition."""
+        self._reroll_random_candidates()
         self._layout_for_bounds(width, height)
 
     def reapply_flash_layout(self, width: float, height: float) -> None:
-        """Reapply the same repetition after GTK allocates the mapped surface."""
+        """Reapply the same positions after GTK allocates the mapped surface."""
         self._layout_for_bounds(width, height)
 
     def start_animations(self) -> None:
@@ -110,6 +109,16 @@ class SceneView(Gtk.Fixed):
     def stop_animations(self) -> None:
         for animation in self._animations:
             animation.stop()
+
+    def _reroll_random_candidates(self) -> None:
+        self._random_candidates = {
+            rendered.model.id: [
+                (self._rng.random(), self._rng.random())
+                for _ in range(RANDOM_CANDIDATES)
+            ]
+            for rendered in self._layers
+            if rendered.model.position.randomize
+        }
 
     def _build(self) -> None:
         for layer in self.scene.layers:
@@ -125,6 +134,9 @@ class SceneView(Gtk.Fixed):
                 widget.add_css_class("preview-error")
             self.put(widget, 0.0, 0.0)
             self._layers.append(RenderedLayer(layer, widget))
+
+        if self.preview:
+            self._reroll_random_candidates()
         GLib.idle_add(self._relayout)
 
     def _make_widget(self, layer: Layer) -> Gtk.Widget:
@@ -187,41 +199,59 @@ class SceneView(Gtk.Fixed):
             self._layout_for_bounds(width, height)
         return GLib.SOURCE_REMOVE
 
+    @staticmethod
+    def _measure(widget: Gtk.Widget) -> tuple[float, float]:
+        _, natural_w, _, _ = widget.measure(Gtk.Orientation.HORIZONTAL, -1)
+        _, natural_h, _, _ = widget.measure(Gtk.Orientation.VERTICAL, natural_w)
+        return max(1, natural_w), max(1, natural_h)
+
     def _layout_for_bounds(self, width: float, height: float) -> None:
         if width <= 1 or height <= 1:
             return
 
-        for rendered in self._layers:
-            widget = rendered.widget
-            _, natural_w, _, _ = widget.measure(Gtk.Orientation.HORIZONTAL, -1)
-            _, natural_h, _, _ = widget.measure(Gtk.Orientation.VERTICAL, natural_w)
-            item_w = max(1, natural_w)
-            item_h = max(1, natural_h)
+        measured = [
+            (rendered, *self._measure(rendered.widget))
+            for rendered in self._layers
+        ]
+        occupied: list[Rect] = []
 
-            random_pair = self._flash_random.get(rendered.model.id)
-            if rendered.model.position.randomize and random_pair is not None:
-                x, y = random_top_left(
-                    width,
-                    height,
-                    item_w,
-                    item_h,
-                    random_pair[0],
-                    random_pair[1],
-                    margin=max(8.0, 8.0 * self.scale),
-                )
-            else:
-                x, y = calculate_position(
-                    rendered.model.position,
-                    width,
-                    height,
-                    item_w,
-                    item_h,
-                    self.scale,
-                )
-            self.move(widget, x, y)
+        # Fixed layers establish obstacles first, regardless of visual z-order.
+        for rendered, item_w, item_h in measured:
+            if rendered.model.position.randomize:
+                continue
+            x, y = calculate_position(
+                rendered.model.position,
+                width,
+                height,
+                item_w,
+                item_h,
+                self.scale,
+            )
+            self.move(rendered.widget, x, y)
+            occupied.append((x, y, item_w, item_h))
+
+        # Random layers are packed sequentially. They avoid all fixed layers and
+        # previously placed random layers. If no collision-free candidate exists,
+        # choose the candidate with the least overlap rather than failing a flash.
+        for rendered, item_w, item_h in measured:
+            if not rendered.model.position.randomize:
+                continue
+            candidates = self._random_candidates.get(rendered.model.id)
+            if not candidates:
+                candidates = [(0.5, 0.5)]
+            x, y = choose_non_overlapping_top_left(
+                width,
+                height,
+                item_w,
+                item_h,
+                candidates,
+                occupied,
+                margin=max(RANDOM_MARGIN_PX, RANDOM_MARGIN_PX * self.scale),
+                spacing=max(RANDOM_SPACING_PX, RANDOM_SPACING_PX * self.scale),
+            )
+            self.move(rendered.widget, x, y)
+            occupied.append((x, y, item_w, item_h))
 
     @staticmethod
     def _layer_label(layer: Layer) -> str:
-        if isinstance(layer, TextLayer):
-            return layer.text or "text"
-        return layer.path or "image"
+        return layer.name
