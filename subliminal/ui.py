@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import __version__
 from .gtk_runtime import Gdk, Gtk, Pango
 from .model import ANCHORS, ImageLayer, Scene, TextLayer, new_id
 from .render import SceneView
@@ -874,6 +875,9 @@ class SettingsPage(Gtk.Box):
         self.autostart.connect("toggled", self._changed)
         self.append(self.start_on_launch)
         self.append(self.autostart)
+        version_label = Gtk.Label(label=f"Version: {__version__}")
+        version_label.set_selectable(True); version_label.set_xalign(0.0); version_label.add_css_class("dim-label")
+        self.append(version_label)
         cfg_label = Gtk.Label(label=f"Configuration: {self.controller.store.path}")
         cfg_label.set_selectable(True); cfg_label.set_xalign(0.0); cfg_label.add_css_class("dim-label")
         self.append(cfg_label)
