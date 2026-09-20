@@ -76,8 +76,10 @@ class Scene:
 
 @dataclass(slots=True)
 class ScheduleConfig:
-    interval_ms: int = 5000
-    duration_ms: int = 50
+    # Wall-clock pause after a flash completes.
+    break_ms: int = 5000
+    # Visible lifetime measured in actual GTK/compositor frame-clock ticks.
+    visible_frames: int = 3
     selection: SelectionMode = "random"
 
 
@@ -173,8 +175,15 @@ def config_from_dict(data: dict) -> AppConfig:
         start_on_launch=bool(data.get("start_on_launch", False)),
         autostart=bool(data.get("autostart", False)),
         schedule=ScheduleConfig(
-            interval_ms=int(schedule_data.get("interval_ms", 5000)),
-            duration_ms=int(schedule_data.get("duration_ms", 50)),
+            # v1 migration: interval_ms was effectively a break after each flash.
+            break_ms=int(schedule_data.get("break_ms", schedule_data.get("interval_ms", 5000))),
+            # v1 migration assumes a 60 Hz reference: 16.67 ms per frame.
+            visible_frames=int(
+                schedule_data.get(
+                    "visible_frames",
+                    max(1, round(float(schedule_data.get("duration_ms", 50)) / (1000.0 / 60.0))),
+                )
+            ),
             selection=schedule_data.get("selection", "random") if schedule_data.get("selection", "random") in {"random", "sequential"} else "random",
         ),
         display=DisplayConfig(
@@ -194,11 +203,9 @@ def config_to_dict(config: AppConfig) -> dict:
 
 
 def normalize_config(config: AppConfig) -> None:
-    config.version = 1
-    config.schedule.interval_ms = max(100, int(config.schedule.interval_ms))
-    config.schedule.duration_ms = max(1, int(config.schedule.duration_ms))
-    if config.schedule.duration_ms >= config.schedule.interval_ms:
-        config.schedule.duration_ms = max(1, config.schedule.interval_ms - 1)
+    config.version = 2
+    config.schedule.break_ms = max(100, int(config.schedule.break_ms))
+    config.schedule.visible_frames = max(1, min(120, int(config.schedule.visible_frames)))
     if config.schedule.selection not in {"random", "sequential"}:
         config.schedule.selection = "random"
     if config.display.mode not in {"all", "selected"}:
@@ -233,12 +240,10 @@ def normalize_config(config: AppConfig) -> None:
 
 def validate_config(config: AppConfig) -> list[str]:
     errors: list[str] = []
-    if config.schedule.interval_ms <= 0:
-        errors.append("Flash interval must be positive.")
-    if config.schedule.duration_ms <= 0:
-        errors.append("Flash duration must be positive.")
-    if config.schedule.duration_ms >= config.schedule.interval_ms:
-        errors.append("Flash duration must be shorter than the interval.")
+    if config.schedule.break_ms <= 0:
+        errors.append("Break between flashes must be positive.")
+    if config.schedule.visible_frames <= 0:
+        errors.append("Visible frame count must be positive.")
     if not config.scenes:
         errors.append("At least one scene is required.")
     for scene in config.scenes:
