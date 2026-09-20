@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 from .gtk_runtime import Gdk, Gio, GLib, Gtk, LayerShell, cairo
 from .media import MediaCache
@@ -53,15 +54,26 @@ def enumerate_monitors() -> list[MonitorInfo]:
 
 
 class OverlayWindow:
+    """One permanently mapped, click-through layer-shell surface per monitor."""
+
     def __init__(self, application: Gtk.Application, monitor_info: MonitorInfo, media: MediaCache) -> None:
         self.monitor_info = monitor_info
         self.media = media
         self.window = Gtk.Window(application=application)
         self.window.set_decorated(False)
-        self.window.set_resizable(True)
+        self.window.set_resizable(False)
+        self.window.set_focusable(False)
+        self.window.set_default_size(monitor_info.width, monitor_info.height)
         self.window.add_css_class("subliminal-overlay")
+
         self._views: dict[str, SceneView] = {}
         self._active: SceneView | None = None
+        self._tick_id: int | None = None
+        self._watchdog_id: int | None = None
+        self._target_frames = 1
+        self._completed_frames = 0
+        self._first_tick_seen = False
+        self._done: Callable[[], None] | None = None
 
         LayerShell.init_for_window(self.window)
         LayerShell.set_namespace(self.window, "subliminal-overlay")
@@ -73,13 +85,13 @@ class OverlayWindow:
             LayerShell.set_anchor(self.window, edge, True)
 
         self.window.connect("realize", self._make_click_through)
-        self.window.connect("map", self._make_click_through)
+        self.window.connect("map", self._on_mapped)
         self.rebuild([])
         self.window.present()
 
     def rebuild(self, scenes: list[Scene]) -> None:
-        if self._active is not None:
-            self._active.stop_animations()
+        # Rebuilding invalidates presentation widgets, so cancel without completing it.
+        self.cancel_flash()
         stack = Gtk.Stack()
         stack.set_hexpand(True)
         stack.set_vexpand(True)
@@ -95,35 +107,136 @@ class OverlayWindow:
         self.window.set_child(stack)
         self.stack = stack
         self._active = None
+        self.window.queue_draw()
         GLib.idle_add(self._make_click_through)
 
-    def show_scene(self, scene_id: str) -> None:
+    def flash_scene(self, scene_id: str, frames: int, done: Callable[[], None]) -> None:
+        self.cancel_flash()
         view = self._views.get(scene_id)
         if view is None:
+            LOG.warning("Scene %s is not built on monitor %s", scene_id, self.monitor_info.connector)
+            GLib.idle_add(self._invoke_once, done)
             return
-        if self._active is not None and self._active is not view:
-            self._active.stop_animations()
+
         self.stack.set_visible_child_name(scene_id)
         self._active = view
         view.start_animations()
-        self._make_click_through()
+        self._target_frames = max(1, int(frames))
+        self._completed_frames = 0
+        self._first_tick_seen = False
+        self._done = done
 
-    def clear(self) -> None:
+        # Changing the visible stack child requests drawing, and the tick callback
+        # keeps the frame clock running. We intentionally do not count the first
+        # tick: tick callbacks run in GTK's Update phase before Paint. The first
+        # tick therefore prepares the first actually visible frame.
+        view.queue_draw()
+        self.stack.queue_draw()
+        self.window.queue_draw()
+        self._tick_id = self.window.add_tick_callback(self._on_tick)
+
+        refresh = self.monitor_info.refresh_hz or 60.0
+        expected_ms = (self._target_frames / refresh) * 1000.0
+        watchdog_ms = max(1000, round(expected_ms * 10 + 500))
+        self._watchdog_id = GLib.timeout_add(watchdog_ms, self._on_watchdog)
+
+        LOG.debug(
+            "Flash %s on %s for %d frames (%.2f Hz)",
+            scene_id,
+            self.monitor_info.connector,
+            self._target_frames,
+            refresh,
+        )
+
+    def cancel_flash(self) -> None:
+        self._remove_tick()
+        self._remove_watchdog()
+        self._done = None
+        self._set_blank()
+
+    def destroy(self) -> None:
+        self.cancel_flash()
+        self.window.destroy()
+
+    def _on_tick(self, _widget, _frame_clock) -> bool:
+        if self._done is None:
+            self._tick_id = None
+            return GLib.SOURCE_REMOVE
+
+        if not self._first_tick_seen:
+            self._first_tick_seen = True
+            self.window.queue_draw()
+            return GLib.SOURCE_CONTINUE
+
+        self._completed_frames += 1
+        if self._completed_frames < self._target_frames:
+            self.window.queue_draw()
+            return GLib.SOURCE_CONTINUE
+
+        self._tick_id = None
+        self._remove_watchdog()
+        done = self._done
+        self._done = None
+        self._set_blank()
+        # Let GTK finish this frame-clock callback before the scheduler mutates state.
+        GLib.idle_add(self._invoke_once, done)
+        return GLib.SOURCE_REMOVE
+
+    def _on_watchdog(self) -> bool:
+        self._watchdog_id = None
+        if self._done is None:
+            return GLib.SOURCE_REMOVE
+        LOG.warning(
+            "Frame-clock watchdog fired on %s after %d/%d frames",
+            self.monitor_info.connector,
+            self._completed_frames,
+            self._target_frames,
+        )
+        self._remove_tick()
+        done = self._done
+        self._done = None
+        self._set_blank()
+        GLib.idle_add(self._invoke_once, done)
+        return GLib.SOURCE_REMOVE
+
+    def _set_blank(self) -> None:
         if self._active is not None:
             self._active.stop_animations()
         self._active = None
-        self.stack.set_visible_child_name("__blank__")
+        if hasattr(self, "stack"):
+            self.stack.set_visible_child_name("__blank__")
+        self.window.queue_draw()
         self._make_click_through()
 
-    def destroy(self) -> None:
-        if self._active is not None:
-            self._active.stop_animations()
-        self.window.destroy()
+    def _remove_tick(self) -> None:
+        if self._tick_id is not None:
+            try:
+                self.window.remove_tick_callback(self._tick_id)
+            except Exception:
+                LOG.debug("Tick callback was already removed", exc_info=True)
+            self._tick_id = None
+
+    def _remove_watchdog(self) -> None:
+        if self._watchdog_id is not None:
+            try:
+                GLib.source_remove(self._watchdog_id)
+            except Exception:
+                LOG.debug("Watchdog source was already removed", exc_info=True)
+            self._watchdog_id = None
+
+    def _on_mapped(self, *_args) -> None:
+        self._make_click_through()
+        self.window.queue_draw()
 
     def _make_click_through(self, *_args) -> bool:
         surface = self.window.get_surface()
         if surface is not None:
             surface.set_input_region(cairo.Region())
+        return GLib.SOURCE_REMOVE
+
+    @staticmethod
+    def _invoke_once(callback: Callable[[], None]) -> bool:
+        callback()
         return GLib.SOURCE_REMOVE
 
 
@@ -135,6 +248,9 @@ class OverlayManager:
         self.windows: dict[str, OverlayWindow] = {}
         self._monitor_model: Gio.ListModel | None = None
         self._monitors_handler: int | None = None
+        self._presentation_generation = 0
+        self._pending_windows: set[str] = set()
+        self._presentation_done: Callable[[], None] | None = None
 
     @staticmethod
     def supported() -> bool:
@@ -151,6 +267,7 @@ class OverlayManager:
             self._monitors_handler = self._monitor_model.connect("items-changed", self._on_monitors_changed)
 
     def stop(self) -> None:
+        self.cancel_flash()
         for window in list(self.windows.values()):
             window.destroy()
         self.windows.clear()
@@ -169,6 +286,7 @@ class OverlayManager:
         }
         for key in list(self.windows):
             if key not in wanted:
+                self._mark_window_finished(key)
                 self.windows.pop(key).destroy()
         for key, info in wanted.items():
             if key not in self.windows:
@@ -176,26 +294,66 @@ class OverlayManager:
         self.rebuild_scenes()
 
     def rebuild_scenes(self) -> None:
+        # Caller must stop/restart the scheduler before rebuilding during a flash.
         scenes = self.get_config().scenes
         for window in self.windows.values():
             window.rebuild(scenes)
 
-    def show_scene(self, scene: Scene) -> None:
+    def flash_scene(self, scene: Scene, frames: int, done: Callable[[], None]) -> None:
+        self.cancel_flash()
         if not self.windows:
             self.start()
+        if not self.windows:
+            LOG.warning("No target monitor available for flash")
+            GLib.idle_add(self._invoke_once, done)
+            return
+
+        self._presentation_generation += 1
+        generation = self._presentation_generation
+        self._pending_windows = set(self.windows)
+        self._presentation_done = done
+
+        for key, window in self.windows.items():
+            window.flash_scene(
+                scene.id,
+                frames,
+                lambda key=key, generation=generation: self._window_finished(generation, key),
+            )
+
+    def cancel_flash(self) -> None:
+        self._presentation_generation += 1
+        self._pending_windows.clear()
+        self._presentation_done = None
         for window in self.windows.values():
-            window.show_scene(scene.id)
+            window.cancel_flash()
 
     def clear(self) -> None:
-        for window in self.windows.values():
-            window.clear()
+        self.cancel_flash()
 
     def monitors(self) -> list[MonitorInfo]:
         return enumerate_monitors()
+
+    def _window_finished(self, generation: int, key: str) -> None:
+        if generation != self._presentation_generation:
+            return
+        self._mark_window_finished(key)
+
+    def _mark_window_finished(self, key: str) -> None:
+        self._pending_windows.discard(key)
+        if self._pending_windows or self._presentation_done is None:
+            return
+        done = self._presentation_done
+        self._presentation_done = None
+        GLib.idle_add(self._invoke_once, done)
 
     def _on_monitors_changed(self, *_args) -> None:
         GLib.idle_add(self._sync_after_change)
 
     def _sync_after_change(self) -> bool:
         self.sync_monitors()
+        return GLib.SOURCE_REMOVE
+
+    @staticmethod
+    def _invoke_once(callback: Callable[[], None]) -> bool:
+        callback()
         return GLib.SOURCE_REMOVE
