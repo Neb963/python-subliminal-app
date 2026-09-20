@@ -277,6 +277,9 @@ class OverlayManager:
         self._monitors_handler = None
 
     def sync_monitors(self) -> None:
+        # A hot-plug/display-target change can invalidate frame clocks. Finish the
+        # current presentation cleanly so the scheduler can enter its next break.
+        self._abort_presentation(notify=True)
         config: AppConfig = self.get_config()
         infos = enumerate_monitors()
         wanted = {
@@ -294,7 +297,8 @@ class OverlayManager:
         self.rebuild_scenes()
 
     def rebuild_scenes(self) -> None:
-        # Caller must stop/restart the scheduler before rebuilding during a flash.
+        # Structural widget replacement invalidates frame callbacks.
+        self._abort_presentation(notify=True)
         scenes = self.get_config().scenes
         for window in self.windows.values():
             window.rebuild(scenes)
@@ -321,11 +325,17 @@ class OverlayManager:
             )
 
     def cancel_flash(self) -> None:
+        self._abort_presentation(notify=False)
+
+    def _abort_presentation(self, *, notify: bool) -> None:
+        done = self._presentation_done
         self._presentation_generation += 1
         self._pending_windows.clear()
         self._presentation_done = None
         for window in self.windows.values():
             window.cancel_flash()
+        if notify and done is not None:
+            GLib.idle_add(self._invoke_once, done)
 
     def clear(self) -> None:
         self.cancel_flash()
