@@ -2,23 +2,27 @@
 
 A native Fedora KDE Plasma **Wayland** application that flashes configurable text and images in a true click-through compositor overlay.
 
-The overlay is implemented with GTK4 + `gtk4-layer-shell`: it stays mapped, never takes keyboard focus, and uses an empty GDK input region so mouse/touch input continues to the application underneath.
+The compositor-facing overlay remains Python + GTK4 + `gtk4-layer-shell`. The editor is a native GTK three-pane interface: **Library → Canvas → Layers/Properties**.
 
 ## Features
 
-- Frame-synchronized flash duration: choose an integer number of real display frames, with detected monitor Hz and ms/frame shown in the UI.
+- Frame-synchronized flash duration using the actual GTK/compositor frame clock.
 - Adjustable wall-clock break between flashes.
 - Multiple scenes, selected randomly or sequentially.
-- Multiple mixed layers per scene: text and images can appear together.
-- Text: any Unicode/emoji text, installed font, pixel size, color/alpha, bold, italic, underline, and 0–100% opacity.
-- Images: PNG, JPEG, WebP, SVG, GIF; source alpha where the format supports it plus 0–100% layer opacity.
+- Organizational folders for scenes; folders do not affect rendering or scheduling.
+- Editable names for every scene and every layer.
+- Multiple mixed text/image layers per scene.
+- Text: Unicode/emoji, installed font, pixel size, RGBA color, bold, italic, underline and opacity.
+- Images: PNG, JPEG, WebP, SVG and GIF.
+- SVG file selection works through explicit filename patterns as well as MIME detection.
 - Animated GIF and animated WebP playback.
-- Fixed positioning with 9-point anchoring, normalized X/Y coordinates, and pixel offsets.
-- Per-layer **Random position every flash** mode; every repetition chooses a new on-screen location while keeping normal-sized content inside the monitor bounds.
-- Per-monitor overlays; all displays or a selected set; monitor hot-plug handling.
-- Persistent layer-shell surfaces rather than repeatedly creating/destroying topmost windows.
-- Live GTK preview, Start/Pause/Stop/Test controls, JSON auto-save, login autostart, and rotating logs.
-- `--diagnose` command for Wayland/layer-shell/monitor checks.
+- Fixed positioning with anchor, normalized X/Y and pixel offsets.
+- Random position on every flash.
+- Randomized layers avoid fixed elements and other randomized layers when space permits; crowded layouts fall back to the least-overlapping candidate rather than dropping content.
+- Multi-monitor support and monitor hot-plug handling.
+- True click-through overlay with no keyboard focus.
+- Import/export of the complete JSON configuration.
+- Auto-save, login autostart, diagnostics and rotating logs.
 
 > JPEG has no per-pixel alpha channel. JPEG layers still support whole-layer opacity.
 
@@ -26,11 +30,9 @@ The overlay is implemented with GTK4 + `gtk4-layer-shell`: it stays mapped, neve
 
 Target: **Fedora KDE Plasma on Wayland / KWin**.
 
-This deliberately does not fall back to an ordinary always-on-top window. If layer-shell is unavailable (for example an X11 session or a compositor without the protocol), the GUI opens but overlay Start/Test is disabled with a clear warning.
+The application deliberately does not fall back to a normal always-on-top window when layer-shell is unavailable.
 
 ## Install on Fedora
-
-Clone the repository and run:
 
 ```bash
 git clone https://github.com/Neb963/python-subliminal-app.git
@@ -38,62 +40,105 @@ cd python-subliminal-app
 ./install.sh
 ```
 
-The installer uses `dnf` for the native runtime packages, then installs the app for the current user under `~/.local/share/subliminal`, creates `~/.local/bin/subliminal`, and adds a KDE application-menu desktop entry.
-
-If the Fedora packages are already installed:
+If the Fedora dependencies are already installed:
 
 ```bash
 ./install.sh --skip-packages
 ```
 
-Then launch **Subliminal** from the KDE application menu, or run:
+Then run:
 
 ```bash
 subliminal
 ```
 
-If `~/.local/bin` is not in your shell PATH, run `~/.local/bin/subliminal` directly or log out/in after installation.
+Verify the installed version:
 
-## Verify overlay support
+```bash
+subliminal --version
+```
 
-Before troubleshooting the UI, run:
+Verify Wayland/layer-shell support:
 
 ```bash
 subliminal --diagnose
 ```
 
-Expected important lines on the target environment are similar to:
+## Editor
 
-```text
-XDG_SESSION_TYPE: wayland
-GDK display: OK (...)
-Layer shell: OK
-Monitors: 1
-```
+The main editor is organized into three panes.
 
-If `Layer shell` is unavailable, confirm that the Plasma session is **Wayland**, not Plasma (X11).
+### Library
 
-## Using the app
+The left pane contains folders and scenes.
 
-1. Open **Content**. The default scene contains `Focus 🎯`.
-2. Add text or image layers. A scene can contain any mixture of both.
-3. Select each layer and set its font/image size and opacity. For position, either use fixed Anchor + X/Y + offsets, or enable **Random position → New position on every flash**.
-4. Open **Timing**. Set **Visible for (frames)** and **Break after flash (seconds)**. The detected refresh rate and conversion to milliseconds are shown automatically.
-5. Open **Displays** to target all monitors or selected connectors.
-6. Use **Test flash** while stopped/paused, then **Start**.
-7. Closing the settings window hides it while the scheduler continues. Launch Subliminal again to reopen it. Use **Quit** to exit the process.
+- **+ Folder** creates an organizational folder.
+- **+ Scene** creates a scene in the selected/current folder.
+- Select a folder or scene and edit **Selected name** to rename it.
+- Duplicate duplicates the selected scene.
+- Deleting a folder moves its scenes to **Unfiled**; it never silently deletes those scenes.
+- A scene can be moved between folders using the Folder selector above the canvas.
 
-Flash duration is intentionally **frame-based**. For example: at 60 Hz, 1 frame ≈ 16.67 ms, 2 frames ≈ 33.3 ms, and 3 frames ≈ 50 ms; at 144 Hz, 1 frame ≈ 6.94 ms. The overlay uses GTK's compositor-driven frame clock and hides only after the configured number of display-frame ticks. The break between flashes remains ordinary wall-clock seconds.
+Folders are editor metadata only. Scheduling still operates on the same flat scene list.
+
+### Canvas
+
+The center pane previews the selected scene.
+
+**Reroll preview** generates another randomized layout without affecting saved fixed positions.
+
+### Layers / Properties
+
+The right pane contains the selected scene's layer list and properties.
+
+Every text and image layer has an editable **Name** field. Layer names are independent from text content and image filenames, so renaming content does not overwrite your organizational names.
+
+For position you can use either:
+
+- fixed Anchor + X/Y + pixel offsets, or
+- **Random → New position on every flash**.
+
+Random placement uses multiple candidate positions and avoids other visible layer bounding boxes with spacing when possible.
+
+## Timing
+
+Flash duration is intentionally frame-based.
+
+Examples:
+
+| Refresh | 1 frame | 2 frames | 3 frames |
+| --- | ---: | ---: | ---: |
+| 60 Hz | 16.67 ms | 33.33 ms | 50.00 ms |
+| 120 Hz | 8.33 ms | 16.67 ms | 25.00 ms |
+| 144 Hz | 6.94 ms | 13.89 ms | 20.83 ms |
+
+The **break after flash** remains ordinary wall-clock seconds.
+
+## Import / export
+
+Use the **Import** and **Export** buttons in the top bar.
+
+Export writes the complete application configuration as JSON, including:
+
+- folders and scene membership;
+- scene/layer names;
+- text/image properties;
+- fixed/random positioning;
+- timing;
+- display selection;
+- autostart/startup preferences.
+
+Image files themselves are **not copied into the export**. Image layers retain their filesystem paths. This keeps export simple and explicit; a portable asset bundle can be added separately later if needed.
 
 ## Configuration and logs
 
-Configuration:
+Main configuration:
 
 ```text
 ~/.config/subliminal/config.json
 ```
 
-The file is written atomically. If it becomes invalid/corrupt, it is renamed to `config.corrupt-<timestamp>.json` and a default configuration is created.
+The configuration is written atomically. Older configuration versions are migrated automatically.
 
 Logs:
 
@@ -101,35 +146,26 @@ Logs:
 ~/.local/state/subliminal/subliminal.log
 ```
 
-## Run directly from a checkout
+Debug overlay lifecycle:
 
-Install the Fedora dependencies first:
+```bash
+subliminal --debug
+```
+
+## Run directly from a checkout
 
 ```bash
 sudo dnf install python3 python3-gobject gtk4 gtk4-layer-shell python3-cairo python3-pillow gdk-pixbuf2 librsvg2
-```
-
-Then:
-
-```bash
 ./run.sh
 ```
 
-or:
-
-```bash
-./run.sh --diagnose
-```
-
 ## Tests
-
-The core model/config/scheduler tests do not require a graphical session:
 
 ```bash
 python3 -m pytest
 ```
 
-The compositor integration must be tested in an actual Plasma Wayland session because a headless CI runner cannot validate KWin layer-shell stacking, input pass-through, fullscreen interaction, or monitor hot-plug behavior.
+CI covers model migration, configuration persistence/import/export, scheduler behavior, collision-aware random placement, Python compilation and shell syntax. KWin compositor behavior still requires an actual Plasma Wayland session.
 
 ## Uninstall
 
@@ -137,7 +173,7 @@ The compositor integration must be tested in an actual Plasma Wayland session be
 ./uninstall.sh
 ```
 
-This preserves your configuration. To remove configuration and logs as well:
+To remove configuration and logs too:
 
 ```bash
 ./uninstall.sh --purge
@@ -145,26 +181,33 @@ This preserves your configuration. To remove configuration and logs as well:
 
 ## Architecture
 
-The process is intentionally simple:
-
 ```text
 Gtk.Application
     └─ AppController
-       ├─ ConfigStore (JSON)
-       ├─ Scheduler (GLib timers)
-       ├─ GTK settings/editor window
+       ├─ ConfigStore
+       ├─ Scheduler
+       ├─ GTK editor
+       │   ├─ Library (folders + scenes)
+       │   ├─ Canvas
+       │   └─ Layers / Properties
        └─ OverlayManager
-          ├─ OverlayWindow / monitor 1
-          └─ OverlayWindow / monitor 2
-             └─ Gtk.Stack
-                ├─ blank
-                └─ SceneView
-                   ├─ TextLayer -> Gtk.Label/Pango
-                   └─ ImageLayer -> Gtk.Picture/Gdk.Texture
+          └─ OverlayWindow per target monitor
+             └─ SceneView
+                ├─ TextLayer
+                └─ ImageLayer
 ```
 
-Overlay windows are created once and kept mapped. A flash switches the stack from `blank` to the chosen scene; after the requested duration it switches back to `blank`. Mouse input is not caught and ignored by the application—the overlay surface itself has an empty input region.
+Folders are not part of the render tree. The render model remains intentionally simple:
+
+```text
+Scene
+├── TextLayer
+├── ImageLayer
+└── ...
+```
+
+Overlay surfaces are mapped for the flash and unmapped during the break. This avoids KWin retaining the last committed visual buffer while preserving true layer-shell behavior.
 
 ## Development scope
 
-The project intentionally targets KDE Plasma/Wayland first. It does not currently attempt GNOME/Mutter, X11, Windows, macOS, video/audio layers, cloud synchronization, or a web UI.
+The project currently targets KDE Plasma/Wayland first. It does not attempt GNOME/Mutter, X11, Windows, macOS, video/audio layers, cloud sync or a web frontend.
