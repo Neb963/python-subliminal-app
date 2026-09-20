@@ -32,6 +32,7 @@ class Position:
     anchor: Anchor = "center"
     offset_x: int = 0
     offset_y: int = 0
+    randomize: bool = False
 
 
 @dataclass(slots=True)
@@ -123,6 +124,7 @@ def position_from_dict(data: dict) -> Position:
         anchor=anchor,
         offset_x=int(data.get("offset_x", 0)),
         offset_y=int(data.get("offset_y", 0)),
+        randomize=bool(data.get("randomize", False)),
     )
 
 
@@ -226,6 +228,7 @@ def normalize_config(config: AppConfig) -> None:
             layer.position.y = min(1.0, max(0.0, float(layer.position.y)))
             if layer.position.anchor not in ANCHORS:
                 layer.position.anchor = "center"
+            layer.position.randomize = bool(layer.position.randomize)
             if isinstance(layer, TextLayer):
                 layer.font_size_px = max(1, int(layer.font_size_px))
                 layer.font_family = layer.font_family.strip() or "Sans"
@@ -294,3 +297,37 @@ def calculate_position(
         container_width * position.x - anchor_x + position.offset_x * scale,
         container_height * position.y - anchor_y + position.offset_y * scale,
     )
+
+
+def random_top_left(
+    container_width: float,
+    container_height: float,
+    item_width: float,
+    item_height: float,
+    random_x: float,
+    random_y: float,
+    margin: float = 8.0,
+) -> tuple[float, float]:
+    """Map two 0..1 random values to an on-screen top-left coordinate."""
+    width = max(0.0, float(container_width))
+    height = max(0.0, float(container_height))
+    item_width = max(0.0, float(item_width))
+    item_height = max(0.0, float(item_height))
+    margin = max(0.0, float(margin))
+
+    # If an item is too large to fit with margins, center it on that axis rather
+    # than generating an off-screen coordinate.
+    available_x = width - item_width - (2.0 * margin)
+    available_y = height - item_height - (2.0 * margin)
+
+    if available_x >= 0:
+        x = margin + min(1.0, max(0.0, random_x)) * available_x
+    else:
+        x = (width - item_width) / 2.0
+
+    if available_y >= 0:
+        y = margin + min(1.0, max(0.0, random_y)) * available_y
+    else:
+        y = (height - item_height) / 2.0
+
+    return x, y
