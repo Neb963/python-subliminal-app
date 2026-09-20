@@ -1,9 +1,11 @@
 from subliminal.model import (
+    Folder,
     Position,
     calculate_position,
+    choose_non_overlapping_top_left,
     config_from_dict,
     default_config,
-    random_top_left,
+    rects_overlap,
 )
 
 
@@ -17,7 +19,11 @@ def test_config_round_trip_defaults_and_clamping() -> None:
         "schedule": {"interval_ms": 1000, "duration_ms": 50},
         "scenes": [{
             "name": "A",
-            "layers": [{"kind": "text", "opacity": 2, "position": {"x": -1, "y": 3}}],
+            "layers": [{
+                "kind": "text",
+                "opacity": 2,
+                "position": {"x": -1, "y": 3},
+            }],
         }],
     })
     layer = cfg.scenes[0].layers[0]
@@ -31,13 +37,34 @@ def test_config_round_trip_defaults_and_clamping() -> None:
 def test_default_config_has_enabled_scene() -> None:
     cfg = default_config()
     assert cfg.enabled_scenes()
+    assert cfg.scenes[0].layers[0].name == "Focus message"
 
 
-def test_random_position_stays_inside_screen() -> None:
-    for rx, ry in ((0.0, 0.0), (0.5, 0.5), (1.0, 1.0)):
-        x, y = random_top_left(1920, 1080, 400, 100, rx, ry, margin=8)
-        assert 8 <= x <= 1920 - 400 - 8
-        assert 8 <= y <= 1080 - 100 - 8
+def test_old_layers_receive_names() -> None:
+    cfg = config_from_dict({
+        "scenes": [{
+            "name": "Legacy",
+            "layers": [
+                {"kind": "text", "text": "Remember this"},
+                {"kind": "image", "path": "/tmp/logo.svg"},
+            ],
+        }],
+    })
+    assert cfg.scenes[0].layers[0].name == "Remember this"
+    assert cfg.scenes[0].layers[1].name == "logo.svg"
+
+
+def test_folder_membership_and_invalid_folder_migration() -> None:
+    cfg = config_from_dict({
+        "folders": [{"id": "work", "name": "Work"}],
+        "scenes": [
+            {"name": "A", "folder_id": "work", "layers": [{"kind": "text"}]},
+            {"name": "B", "folder_id": "missing", "layers": [{"kind": "text"}]},
+        ],
+    })
+    assert cfg.folders[0].name == "Work"
+    assert cfg.scenes[0].folder_id == "work"
+    assert cfg.scenes[1].folder_id is None
 
 
 def test_random_position_config_round_trip() -> None:
@@ -46,9 +73,42 @@ def test_random_position_config_round_trip() -> None:
             "name": "Random",
             "layers": [{
                 "kind": "text",
+                "name": "Mover",
                 "text": "move",
                 "position": {"x": 0.2, "y": 0.7, "randomize": True},
             }],
         }],
     })
     assert cfg.scenes[0].layers[0].position.randomize is True
+    assert cfg.scenes[0].layers[0].name == "Mover"
+
+
+def test_collision_aware_random_position_uses_free_candidate() -> None:
+    occupied = [(10.0, 10.0, 200.0, 100.0)]
+    x, y = choose_non_overlapping_top_left(
+        1000,
+        600,
+        100,
+        50,
+        candidates=[(0.05, 0.05), (0.9, 0.9)],
+        occupied=occupied,
+        margin=10,
+        spacing=20,
+    )
+    result = (x, y, 100.0, 50.0)
+    assert not rects_overlap(result, occupied[0], spacing=20)
+
+
+def test_random_position_fallback_stays_on_screen() -> None:
+    x, y = choose_non_overlapping_top_left(
+        300,
+        200,
+        100,
+        50,
+        candidates=[(0.0, 0.0), (1.0, 1.0)],
+        occupied=[(0.0, 0.0, 300.0, 200.0)],
+        margin=8,
+        spacing=16,
+    )
+    assert 8 <= x <= 192
+    assert 8 <= y <= 142
