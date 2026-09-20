@@ -91,7 +91,7 @@ class DisplayConfig:
 
 @dataclass(slots=True)
 class AppConfig:
-    version: int = 1
+    version: int = 2
     start_on_launch: bool = False
     autostart: bool = False
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
