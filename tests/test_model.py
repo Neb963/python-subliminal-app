@@ -1,4 +1,10 @@
-from subliminal.model import Position, calculate_position, config_from_dict, default_config
+from subliminal.model import (
+    Position,
+    calculate_position,
+    config_from_dict,
+    default_config,
+    random_top_left,
+)
 
 
 def test_center_position() -> None:
@@ -25,3 +31,24 @@ def test_config_round_trip_defaults_and_clamping() -> None:
 def test_default_config_has_enabled_scene() -> None:
     cfg = default_config()
     assert cfg.enabled_scenes()
+
+
+def test_random_position_stays_inside_screen() -> None:
+    for rx, ry in ((0.0, 0.0), (0.5, 0.5), (1.0, 1.0)):
+        x, y = random_top_left(1920, 1080, 400, 100, rx, ry, margin=8)
+        assert 8 <= x <= 1920 - 400 - 8
+        assert 8 <= y <= 1080 - 100 - 8
+
+
+def test_random_position_config_round_trip() -> None:
+    cfg = config_from_dict({
+        "scenes": [{
+            "name": "Random",
+            "layers": [{
+                "kind": "text",
+                "text": "move",
+                "position": {"x": 0.2, "y": 0.7, "randomize": True},
+            }],
+        }],
+    })
+    assert cfg.scenes[0].layers[0].position.randomize is True
