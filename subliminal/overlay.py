@@ -64,6 +64,7 @@ class OverlayWindow:
         self.window.set_resizable(False)
         self.window.set_focusable(False)
         self.window.set_default_size(monitor_info.width, monitor_info.height)
+        self.window.set_opacity(0.0)
         self.window.add_css_class("subliminal-overlay")
 
         self._views: dict[str, SceneView] = {}
@@ -108,6 +109,7 @@ class OverlayWindow:
         self.window.set_child(stack)
         self.stack = stack
         self._active = None
+        self.window.set_opacity(0.0)
         self.window.queue_draw()
         GLib.idle_add(self._make_click_through)
 
@@ -126,6 +128,7 @@ class OverlayWindow:
 
         self.stack.set_visible_child_name(scene_id)
         self._active = view
+        self.window.set_opacity(1.0)
         view.start_animations()
         self._target_frames = max(1, int(frames))
         self._completed_frames = 0
@@ -207,6 +210,11 @@ class OverlayWindow:
         return GLib.SOURCE_REMOVE
 
     def _set_blank(self) -> None:
+        # Do not rely on an empty transparent child to erase the previous Wayland
+        # buffer. Make the entire native toplevel transparent first; Gtk documents
+        # toplevel opacity as supported on Wayland. This also forces a full visual
+        # state change even when the scene graph becomes empty.
+        self.window.set_opacity(0.0)
         if self._active is not None:
             self._active.stop_animations()
         self._active = None
