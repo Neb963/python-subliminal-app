@@ -8,7 +8,7 @@ from . import __version__
 from .config import state_dir
 
 
-def configure_logging() -> None:
+def configure_logging(*, debug: bool = False) -> None:
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
@@ -19,19 +19,20 @@ def configure_logging() -> None:
     )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
-    root.setLevel(logging.INFO)
+    root.setLevel(logging.DEBUG if debug else logging.INFO)
     root.addHandler(handler)
 
 
 def main() -> int:
     diagnose = "--diagnose" in sys.argv[1:]
     show_version = "--version" in sys.argv[1:] or "-V" in sys.argv[1:]
+    debug = "--debug" in sys.argv[1:]
     background = "--background" in sys.argv[1:]
     argv = [
         arg for arg in sys.argv
-        if arg not in {"--background", "--diagnose", "--version", "-V"}
+        if arg not in {"--background", "--diagnose", "--version", "-V", "--debug"}
     ]
-    configure_logging()
+    configure_logging(debug=debug)
     if show_version:
         print(f"Subliminal {__version__}")
         return 0
