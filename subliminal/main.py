@@ -23,9 +23,13 @@ def configure_logging() -> None:
 
 
 def main() -> int:
+    diagnose = "--diagnose" in sys.argv[1:]
     background = "--background" in sys.argv[1:]
-    argv = [arg for arg in sys.argv if arg != "--background"]
+    argv = [arg for arg in sys.argv if arg not in {"--background", "--diagnose"}]
     configure_logging()
+    if diagnose:
+        from .diagnostics import run_diagnostics
+        return run_diagnostics()
     try:
         from .app import SubliminalApplication
     except (ImportError, OSError, ValueError) as exc:
