@@ -24,15 +24,36 @@ class FakeTimers:
         return callback()
 
 
-def test_start_flash_hide_cycle() -> None:
+class FakePresenter:
+    def __init__(self) -> None:
+        self.calls = []
+        self.done = None
+        self.cancelled = 0
+
+    def present(self, scene, frames, done):
+        self.calls.append((scene, frames))
+        self.done = done
+
+    def cancel(self):
+        self.cancelled += 1
+        self.done = None
+
+    def finish(self):
+        done = self.done
+        self.done = None
+        assert done is not None
+        done()
+
+
+def test_start_flash_frame_completion_break_cycle() -> None:
     cfg = default_config()
+    cfg.schedule.visible_frames = 3
     timers = FakeTimers()
-    shown = []
-    cleared = []
+    presenter = FakePresenter()
     scheduler = Scheduler(
         lambda: cfg,
-        shown.append,
-        lambda: cleared.append(True),
+        presenter.present,
+        presenter.cancel,
         timers.add,
         timers.remove,
         rng=random.Random(1),
@@ -41,19 +62,46 @@ def test_start_flash_hide_cycle() -> None:
     assert scheduler.state == SchedulerState.WAITING
     timers.fire_next()
     assert scheduler.state == SchedulerState.VISIBLE
-    assert shown
-    timers.fire_next()
+    assert presenter.calls[-1][1] == 3
+    assert not timers.callbacks
+    presenter.finish()
     assert scheduler.state == SchedulerState.WAITING
+    assert timers.callbacks
 
 
 def test_random_avoids_immediate_repeat() -> None:
     cfg = default_config()
     cfg.scenes = [Scene(name="A", layers=[TextLayer()]), Scene(name="B", layers=[TextLayer()])]
     timers = FakeTimers()
-    shown = []
-    scheduler = Scheduler(lambda: cfg, shown.append, lambda: None, timers.add, timers.remove, rng=random.Random(0))
+    presenter = FakePresenter()
+    scheduler = Scheduler(
+        lambda: cfg,
+        presenter.present,
+        presenter.cancel,
+        timers.add,
+        timers.remove,
+        rng=random.Random(0),
+    )
     scheduler.start(immediate=True)
-    first = shown[-1].id
+    first = presenter.calls[-1][0].id
+    presenter.finish()
     timers.fire_next()
-    timers.fire_next()
-    assert shown[-1].id != first
+    assert presenter.calls[-1][0].id != first
+
+
+def test_pause_cancels_active_frame_presentation() -> None:
+    cfg = default_config()
+    timers = FakeTimers()
+    presenter = FakePresenter()
+    scheduler = Scheduler(
+        lambda: cfg,
+        presenter.present,
+        presenter.cancel,
+        timers.add,
+        timers.remove,
+    )
+    scheduler.start(immediate=True)
+    assert scheduler.state == SchedulerState.VISIBLE
+    scheduler.pause()
+    assert scheduler.state == SchedulerState.PAUSED
+    assert presenter.done is None
