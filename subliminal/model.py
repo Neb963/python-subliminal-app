@@ -20,9 +20,17 @@ ANCHORS: tuple[Anchor, ...] = (
     "bottom-left", "bottom", "bottom-right",
 )
 
+Rect: TypeAlias = tuple[float, float, float, float]
+
 
 def new_id() -> str:
     return uuid4().hex[:12]
+
+
+@dataclass(slots=True)
+class Folder:
+    id: str = field(default_factory=new_id)
+    name: str = "Folder"
 
 
 @dataclass(slots=True)
@@ -39,6 +47,7 @@ class Position:
 class TextLayer:
     id: str = field(default_factory=new_id)
     kind: Literal["text"] = "text"
+    name: str = "Text"
     enabled: bool = True
     text: str = "Focus 🎯"
     position: Position = field(default_factory=Position)
@@ -55,6 +64,7 @@ class TextLayer:
 class ImageLayer:
     id: str = field(default_factory=new_id)
     kind: Literal["image"] = "image"
+    name: str = "Image"
     enabled: bool = True
     path: str = ""
     position: Position = field(default_factory=Position)
@@ -71,15 +81,14 @@ Layer: TypeAlias = TextLayer | ImageLayer
 class Scene:
     id: str = field(default_factory=new_id)
     name: str = "Scene"
+    folder_id: str | None = None
     enabled: bool = True
     layers: list[Layer] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class ScheduleConfig:
-    # Wall-clock pause after a flash completes.
     break_ms: int = 5000
-    # Visible lifetime measured in actual GTK/compositor frame-clock ticks.
     visible_frames: int = 3
     selection: SelectionMode = "random"
 
@@ -92,15 +101,20 @@ class DisplayConfig:
 
 @dataclass(slots=True)
 class AppConfig:
-    version: int = 3
+    version: int = 4
     start_on_launch: bool = False
     autostart: bool = False
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
+    folders: list[Folder] = field(default_factory=list)
     scenes: list[Scene] = field(default_factory=list)
 
     def enabled_scenes(self) -> list[Scene]:
-        return [scene for scene in self.scenes if scene.enabled and any(layer.enabled for layer in scene.layers)]
+        return [
+            scene
+            for scene in self.scenes
+            if scene.enabled and any(layer.enabled for layer in scene.layers)
+        ]
 
 
 def default_config() -> AppConfig:
@@ -108,7 +122,14 @@ def default_config() -> AppConfig:
         scenes=[
             Scene(
                 name="Focus",
-                layers=[TextLayer(text="Focus 🎯", bold=True, opacity=0.55)],
+                layers=[
+                    TextLayer(
+                        name="Focus message",
+                        text="Focus 🎯",
+                        bold=True,
+                        opacity=0.55,
+                    )
+                ],
             )
         ]
     )
@@ -128,6 +149,17 @@ def position_from_dict(data: dict) -> Position:
     )
 
 
+def _legacy_layer_name(data: dict, kind: str) -> str:
+    explicit = str(data.get("name", "")).strip()
+    if explicit:
+        return explicit
+    if kind == "image":
+        path = str(data.get("path", "")).strip()
+        return Path(path).name if path else "Image"
+    text = str(data.get("text", "")).replace("\n", " ").strip()
+    return text[:40] if text else "Text"
+
+
 def layer_from_dict(data: dict) -> Layer:
     kind = data.get("kind", data.get("type", "text"))
     position = position_from_dict(data.get("position", {}))
@@ -136,6 +168,7 @@ def layer_from_dict(data: dict) -> Layer:
         height = data.get("height_px")
         return ImageLayer(
             id=str(data.get("id") or new_id()),
+            name=_legacy_layer_name(data, "image"),
             enabled=bool(data.get("enabled", True)),
             path=str(data.get("path", "")),
             position=position,
@@ -146,6 +179,7 @@ def layer_from_dict(data: dict) -> Layer:
         )
     return TextLayer(
         id=str(data.get("id") or new_id()),
+        name=_legacy_layer_name(data, "text"),
         enabled=bool(data.get("enabled", True)),
         text=str(data.get("text", "")),
         position=position,
@@ -162,36 +196,65 @@ def layer_from_dict(data: dict) -> Layer:
 def config_from_dict(data: dict) -> AppConfig:
     schedule_data = data.get("schedule", {})
     display_data = data.get("display", {})
+
+    folders = [
+        Folder(
+            id=str(item.get("id") or new_id()),
+            name=str(item.get("name", "Folder")),
+        )
+        for item in data.get("folders", [])
+        if isinstance(item, dict)
+    ]
+
     scenes: list[Scene] = []
     for raw_scene in data.get("scenes", []):
         scenes.append(
             Scene(
                 id=str(raw_scene.get("id") or new_id()),
                 name=str(raw_scene.get("name", "Scene")),
+                folder_id=(
+                    str(raw_scene["folder_id"])
+                    if raw_scene.get("folder_id") is not None
+                    else None
+                ),
                 enabled=bool(raw_scene.get("enabled", True)),
                 layers=[layer_from_dict(item) for item in raw_scene.get("layers", [])],
             )
         )
+
     cfg = AppConfig(
         version=int(data.get("version", 1)),
         start_on_launch=bool(data.get("start_on_launch", False)),
         autostart=bool(data.get("autostart", False)),
         schedule=ScheduleConfig(
-            # v1 migration: interval_ms was effectively a break after each flash.
             break_ms=int(schedule_data.get("break_ms", schedule_data.get("interval_ms", 5000))),
-            # v1 migration assumes a 60 Hz reference: 16.67 ms per frame.
             visible_frames=int(
                 schedule_data.get(
                     "visible_frames",
-                    max(1, round(float(schedule_data.get("duration_ms", 50)) / (1000.0 / 60.0))),
+                    max(
+                        1,
+                        round(
+                            float(schedule_data.get("duration_ms", 50))
+                            / (1000.0 / 60.0)
+                        ),
+                    ),
                 )
             ),
-            selection=schedule_data.get("selection", "random") if schedule_data.get("selection", "random") in {"random", "sequential"} else "random",
+            selection=(
+                schedule_data.get("selection", "random")
+                if schedule_data.get("selection", "random") in {"random", "sequential"}
+                else "random"
+            ),
         ),
         display=DisplayConfig(
-            mode=display_data.get("mode", "all") if display_data.get("mode", "all") in {"all", "selected"} else "all",
+            mode=(
+                display_data.get("mode", "all")
+                if display_data.get("mode", "all") in {"all", "selected"}
+                else "all"
+            ),
             connectors=[str(v) for v in display_data.get("connectors", [])],
         ),
+        folders=folders,
         scenes=scenes,
     )
     if not cfg.scenes:
@@ -205,30 +268,48 @@ def config_to_dict(config: AppConfig) -> dict:
 
 
 def normalize_config(config: AppConfig) -> None:
-    config.version = 3
+    config.version = 4
     config.schedule.break_ms = max(100, int(config.schedule.break_ms))
-    config.schedule.visible_frames = max(1, min(120, int(config.schedule.visible_frames)))
+    config.schedule.visible_frames = max(
+        1, min(120, int(config.schedule.visible_frames))
+    )
     if config.schedule.selection not in {"random", "sequential"}:
         config.schedule.selection = "random"
     if config.display.mode not in {"all", "selected"}:
         config.display.mode = "all"
 
     seen_ids: set[str] = set()
+
+    for folder in config.folders:
+        if not folder.id or folder.id in seen_ids:
+            folder.id = new_id()
+        seen_ids.add(folder.id)
+        folder.name = folder.name.strip() or "Folder"
+
+    valid_folder_ids = {folder.id for folder in config.folders}
+
     for scene in config.scenes:
         if not scene.id or scene.id in seen_ids:
             scene.id = new_id()
         seen_ids.add(scene.id)
         scene.name = scene.name.strip() or "Scene"
+        if scene.folder_id not in valid_folder_ids:
+            scene.folder_id = None
+
         for layer in scene.layers:
             if not layer.id or layer.id in seen_ids:
                 layer.id = new_id()
             seen_ids.add(layer.id)
+            layer.name = layer.name.strip() or (
+                "Text" if isinstance(layer, TextLayer) else "Image"
+            )
             layer.opacity = min(1.0, max(0.0, float(layer.opacity)))
             layer.position.x = min(1.0, max(0.0, float(layer.position.x)))
             layer.position.y = min(1.0, max(0.0, float(layer.position.y)))
             if layer.position.anchor not in ANCHORS:
                 layer.position.anchor = "center"
             layer.position.randomize = bool(layer.position.randomize)
+
             if isinstance(layer, TextLayer):
                 layer.font_size_px = max(1, int(layer.font_size_px))
                 layer.font_family = layer.font_family.strip() or "Sans"
@@ -249,10 +330,17 @@ def validate_config(config: AppConfig) -> list[str]:
         errors.append("Visible frame count must be positive.")
     if not config.scenes:
         errors.append("At least one scene is required.")
+
+    for folder in config.folders:
+        if not folder.name.strip():
+            errors.append("Folder names cannot be empty.")
+
     for scene in config.scenes:
         if not scene.name.strip():
             errors.append("Scene names cannot be empty.")
         for layer in scene.layers:
+            if not layer.name.strip():
+                errors.append("Layer names cannot be empty.")
             if isinstance(layer, ImageLayer) and layer.path:
                 suffix = Path(layer.path).suffix.lower()
                 if suffix not in SUPPORTED_IMAGE_EXTENSIONS:
@@ -272,14 +360,26 @@ def _valid_color(value: str) -> bool:
 
 def anchor_offset(anchor: Anchor, width: float, height: float) -> tuple[float, float]:
     columns = {
-        "top-left": 0.0, "left": 0.0, "bottom-left": 0.0,
-        "top": 0.5, "center": 0.5, "bottom": 0.5,
-        "top-right": 1.0, "right": 1.0, "bottom-right": 1.0,
+        "top-left": 0.0,
+        "left": 0.0,
+        "bottom-left": 0.0,
+        "top": 0.5,
+        "center": 0.5,
+        "bottom": 0.5,
+        "top-right": 1.0,
+        "right": 1.0,
+        "bottom-right": 1.0,
     }
     rows = {
-        "top-left": 0.0, "top": 0.0, "top-right": 0.0,
-        "left": 0.5, "center": 0.5, "right": 0.5,
-        "bottom-left": 1.0, "bottom": 1.0, "bottom-right": 1.0,
+        "top-left": 0.0,
+        "top": 0.0,
+        "top-right": 0.0,
+        "left": 0.5,
+        "center": 0.5,
+        "right": 0.5,
+        "bottom-left": 1.0,
+        "bottom": 1.0,
+        "bottom-right": 1.0,
     }
     return width * columns[anchor], height * rows[anchor]
 
@@ -308,15 +408,12 @@ def random_top_left(
     random_y: float,
     margin: float = 8.0,
 ) -> tuple[float, float]:
-    """Map two 0..1 random values to an on-screen top-left coordinate."""
     width = max(0.0, float(container_width))
     height = max(0.0, float(container_height))
     item_width = max(0.0, float(item_width))
     item_height = max(0.0, float(item_height))
     margin = max(0.0, float(margin))
 
-    # If an item is too large to fit with margins, center it on that axis rather
-    # than generating an off-screen coordinate.
     available_x = width - item_width - (2.0 * margin)
     available_y = height - item_height - (2.0 * margin)
 
@@ -330,4 +427,71 @@ def random_top_left(
     else:
         y = (height - item_height) / 2.0
 
+    return x, y
+
+
+def rects_overlap(a: Rect, b: Rect, spacing: float = 0.0) -> bool:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    gap = max(0.0, float(spacing))
+    return not (
+        ax + aw + gap <= bx
+        or bx + bw + gap <= ax
+        or ay + ah + gap <= by
+        or by + bh + gap <= ay
+    )
+
+
+def _intersection_area(a: Rect, b: Rect, spacing: float = 0.0) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    gap = max(0.0, float(spacing))
+    left = max(ax, bx)
+    top = max(ay, by)
+    right = min(ax + aw + gap, bx + bw + gap)
+    bottom = min(ay + ah + gap, by + bh + gap)
+    return max(0.0, right - left) * max(0.0, bottom - top)
+
+
+def choose_non_overlapping_top_left(
+    container_width: float,
+    container_height: float,
+    item_width: float,
+    item_height: float,
+    candidates: list[tuple[float, float]],
+    occupied: list[Rect],
+    *,
+    margin: float = 8.0,
+    spacing: float = 16.0,
+) -> tuple[float, float]:
+    """Choose the first collision-free random candidate, else least-overlap."""
+    if not candidates:
+        candidates = [(0.5, 0.5)]
+
+    evaluated: list[tuple[float, float, float]] = []
+    for random_x, random_y in candidates:
+        x, y = random_top_left(
+            container_width,
+            container_height,
+            item_width,
+            item_height,
+            random_x,
+            random_y,
+            margin,
+        )
+        rect = (x, y, item_width, item_height)
+        collisions = [
+            other
+            for other in occupied
+            if rects_overlap(rect, other, spacing)
+        ]
+        if not collisions:
+            return x, y
+        overlap = sum(
+            _intersection_area(rect, other, spacing)
+            for other in collisions
+        )
+        evaluated.append((overlap, x, y))
+
+    _, x, y = min(evaluated, key=lambda item: item[0])
     return x, y
