@@ -8,14 +8,15 @@ def test_center_position() -> None:
 
 def test_config_round_trip_defaults_and_clamping() -> None:
     cfg = config_from_dict({
-        "schedule": {"interval_ms": 1000, "duration_ms": 2000},
+        "schedule": {"interval_ms": 1000, "duration_ms": 50},
         "scenes": [{
             "name": "A",
             "layers": [{"kind": "text", "opacity": 2, "position": {"x": -1, "y": 3}}],
         }],
     })
     layer = cfg.scenes[0].layers[0]
-    assert cfg.schedule.duration_ms == 999
+    assert cfg.schedule.break_ms == 1000
+    assert cfg.schedule.visible_frames == 3
     assert layer.opacity == 1.0
     assert layer.position.x == 0.0
     assert layer.position.y == 1.0
