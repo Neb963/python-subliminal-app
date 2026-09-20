@@ -74,6 +74,7 @@ class OverlayWindow:
         self._completed_frames = 0
         self._first_tick_seen = False
         self._done: Callable[[], None] | None = None
+        self._pending_flash: tuple[str, int, Callable[[], None]] | None = None
 
         LayerShell.init_for_window(self.window)
         LayerShell.set_namespace(self.window, "subliminal-overlay")
@@ -112,6 +113,11 @@ class OverlayWindow:
 
     def flash_scene(self, scene_id: str, frames: int, done: Callable[[], None]) -> None:
         self.cancel_flash()
+        if not self.window.get_mapped():
+            self._pending_flash = (scene_id, max(1, int(frames)), done)
+            self.window.present()
+            return
+
         view = self._views.get(scene_id)
         if view is None:
             LOG.warning("Scene %s is not built on monitor %s", scene_id, self.monitor_info.connector)
@@ -149,6 +155,7 @@ class OverlayWindow:
         )
 
     def cancel_flash(self) -> None:
+        self._pending_flash = None
         self._remove_tick()
         self._remove_watchdog()
         self._done = None
@@ -227,11 +234,20 @@ class OverlayWindow:
     def _on_mapped(self, *_args) -> None:
         self._make_click_through()
         self.window.queue_draw()
+        if self._pending_flash is not None:
+            pending = self._pending_flash
+            self._pending_flash = None
+            GLib.idle_add(self._start_pending_flash, pending)
 
     def _make_click_through(self, *_args) -> bool:
         surface = self.window.get_surface()
         if surface is not None:
             surface.set_input_region(cairo.Region())
+        return GLib.SOURCE_REMOVE
+
+    def _start_pending_flash(self, pending: tuple[str, int, Callable[[], None]]) -> bool:
+        scene_id, frames, done = pending
+        self.flash_scene(scene_id, frames, done)
         return GLib.SOURCE_REMOVE
 
     @staticmethod
