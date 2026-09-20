@@ -132,6 +132,9 @@ class OverlayWindow:
         # contains the flash contents. The actual frame counter starts from map.
         self.stack.set_visible_child_name(scene_id)
         self._active = view
+        # Gtk.Fixed may have no useful allocation while the layer-shell window is
+        # unmapped. Position synchronously from the monitor geometry before map.
+        view.prepare_flash(self.monitor_info.width, self.monitor_info.height)
         self._target_frames = max(1, int(frames))
         self._completed_frames = 0
         self._first_tick_seen = False
@@ -174,6 +177,11 @@ class OverlayWindow:
         self._done = done
 
         if self._active is not None:
+            actual_width = self.window.get_width() or self.monitor_info.width
+            actual_height = self.window.get_height() or self.monitor_info.height
+            # Reapply the same fixed/random coordinates after GTK has allocated
+            # the mapped surface. This does not reroll random placement.
+            self._active.reapply_flash_layout(actual_width, actual_height)
             self._active.start_animations()
             self._active.queue_draw()
         self.stack.queue_draw()
