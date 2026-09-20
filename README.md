@@ -13,7 +13,8 @@ The overlay is implemented with GTK4 + `gtk4-layer-shell`: it stays mapped, neve
 - Text: any Unicode/emoji text, installed font, pixel size, color/alpha, bold, italic, underline, and 0–100% opacity.
 - Images: PNG, JPEG, WebP, SVG, GIF; source alpha where the format supports it plus 0–100% layer opacity.
 - Animated GIF and animated WebP playback.
-- 9-point anchoring, normalized X/Y position, and pixel offsets.
+- Fixed positioning with 9-point anchoring, normalized X/Y coordinates, and pixel offsets.
+- Per-layer **Random position every flash** mode; every repetition chooses a new on-screen location while keeping normal-sized content inside the monitor bounds.
 - Per-monitor overlays; all displays or a selected set; monitor hot-plug handling.
 - Persistent layer-shell surfaces rather than repeatedly creating/destroying topmost windows.
 - Live GTK preview, Start/Pause/Stop/Test controls, JSON auto-save, login autostart, and rotating logs.
@@ -76,7 +77,7 @@ If `Layer shell` is unavailable, confirm that the Plasma session is **Wayland**,
 
 1. Open **Content**. The default scene contains `Focus 🎯`.
 2. Add text or image layers. A scene can contain any mixture of both.
-3. Select each layer and set its font/image size, opacity, anchor, X/Y percentage and offsets.
+3. Select each layer and set its font/image size and opacity. For position, either use fixed Anchor + X/Y + offsets, or enable **Random position → New position on every flash**.
 4. Open **Timing**. Set **Visible for (frames)** and **Break after flash (seconds)**. The detected refresh rate and conversion to milliseconds are shown automatically.
 5. Open **Displays** to target all monitors or selected connectors.
 6. Use **Test flash** while stopped/paused, then **Start**.
