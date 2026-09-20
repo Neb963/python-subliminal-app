@@ -6,7 +6,8 @@ The overlay is implemented with GTK4 + `gtk4-layer-shell`: it stays mapped, neve
 
 ## Features
 
-- Adjustable flash interval and display duration in milliseconds.
+- Frame-synchronized flash duration: choose an integer number of real display frames, with detected monitor Hz and ms/frame shown in the UI.
+- Adjustable wall-clock break between flashes.
 - Multiple scenes, selected randomly or sequentially.
 - Multiple mixed layers per scene: text and images can appear together.
 - Text: any Unicode/emoji text, installed font, pixel size, color/alpha, bold, italic, underline, and 0–100% opacity.
@@ -76,12 +77,12 @@ If `Layer shell` is unavailable, confirm that the Plasma session is **Wayland**,
 1. Open **Content**. The default scene contains `Focus 🎯`.
 2. Add text or image layers. A scene can contain any mixture of both.
 3. Select each layer and set its font/image size, opacity, anchor, X/Y percentage and offsets.
-4. Open **Timing** and set `Flash every` and `Show for`.
+4. Open **Timing**. Set **Visible for (frames)** and **Break after flash (seconds)**. The detected refresh rate and conversion to milliseconds are shown automatically.
 5. Open **Displays** to target all monitors or selected connectors.
 6. Use **Test flash** while stopped/paused, then **Start**.
 7. Closing the settings window hides it while the scheduler continues. Launch Subliminal again to reopen it. Use **Quit** to exit the process.
 
-The duration is a requested timer interval, not a guarantee of sub-frame display time. For example, one frame at 60 Hz is about 16.67 ms. The Timing page shows the detected monitor refresh and approximate frame count when available.
+Flash duration is intentionally **frame-based**. For example: at 60 Hz, 1 frame ≈ 16.67 ms, 2 frames ≈ 33.3 ms, and 3 frames ≈ 50 ms; at 144 Hz, 1 frame ≈ 6.94 ms. The overlay uses GTK's compositor-driven frame clock and hides only after the configured number of display-frame ticks. The break between flashes remains ordinary wall-clock seconds.
 
 ## Configuration and logs
 
