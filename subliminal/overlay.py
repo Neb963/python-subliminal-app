@@ -54,7 +54,7 @@ def enumerate_monitors() -> list[MonitorInfo]:
 
 
 class OverlayWindow:
-    """One permanently mapped, click-through layer-shell surface per monitor."""
+    """One click-through layer-shell surface per monitor, mapped only while flashing."""
 
     def __init__(self, application: Gtk.Application, monitor_info: MonitorInfo, media: MediaCache) -> None:
         self.monitor_info = monitor_info
@@ -75,7 +75,7 @@ class OverlayWindow:
         self._completed_frames = 0
         self._first_tick_seen = False
         self._done: Callable[[], None] | None = None
-        self._pending_flash: tuple[str, int, Callable[[], None]] | None = None
+        self._pending_flash: tuple[int, Callable[[], None]] | None = None
 
         LayerShell.init_for_window(self.window)
         LayerShell.set_namespace(self.window, "subliminal-overlay")
@@ -83,42 +83,44 @@ class OverlayWindow:
         LayerShell.set_layer(self.window, LayerShell.Layer.OVERLAY)
         LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.NONE)
         LayerShell.set_exclusive_zone(self.window, 0)
-        for edge in (LayerShell.Edge.TOP, LayerShell.Edge.BOTTOM, LayerShell.Edge.LEFT, LayerShell.Edge.RIGHT):
+        for edge in (
+            LayerShell.Edge.TOP,
+            LayerShell.Edge.BOTTOM,
+            LayerShell.Edge.LEFT,
+            LayerShell.Edge.RIGHT,
+        ):
             LayerShell.set_anchor(self.window, edge, True)
 
         self.window.connect("realize", self._make_click_through)
         self.window.connect("map", self._on_mapped)
+        self.window.connect("unmap", self._on_unmapped)
         self.rebuild([])
-        self.window.present()
 
     def rebuild(self, scenes: list[Scene]) -> None:
-        # Rebuilding invalidates presentation widgets, so cancel without completing it.
         self.cancel_flash()
         stack = Gtk.Stack()
         stack.set_hexpand(True)
         stack.set_vexpand(True)
+
         blank = Gtk.Box()
         blank.add_css_class("subliminal-blank")
         stack.add_named(blank, "__blank__")
+
         self._views = {}
         for scene in scenes:
             view = SceneView(scene, self.media)
             self._views[scene.id] = view
             stack.add_named(view, scene.id)
+
         stack.set_visible_child_name("__blank__")
         self.window.set_child(stack)
         self.stack = stack
         self._active = None
         self.window.set_opacity(0.0)
-        self.window.queue_draw()
-        GLib.idle_add(self._make_click_through)
+        self.window.set_visible(False)
 
     def flash_scene(self, scene_id: str, frames: int, done: Callable[[], None]) -> None:
         self.cancel_flash()
-        if not self.window.get_mapped():
-            self._pending_flash = (scene_id, max(1, int(frames)), done)
-            self.window.present()
-            return
 
         view = self._views.get(scene_id)
         if view is None:
@@ -126,22 +128,58 @@ class OverlayWindow:
             GLib.idle_add(self._invoke_once, done)
             return
 
+        # Prepare the scene before mapping so KWin's first new surface buffer already
+        # contains the flash contents. The actual frame counter starts from map.
         self.stack.set_visible_child_name(scene_id)
         self._active = view
+        self._target_frames = max(1, int(frames))
+        self._completed_frames = 0
+        self._first_tick_seen = False
+        self._pending_flash = (self._target_frames, done)
         self.window.set_opacity(1.0)
-        view.start_animations()
+
+        view.queue_draw()
+        self.stack.queue_draw()
+        self.window.queue_draw()
+        self.window.present()
+
+        # Some GTK backends may report mapped synchronously. In that case the map
+        # signal has already consumed _pending_flash; otherwise it will do so later.
+        if self.window.get_mapped() and self._pending_flash is not None:
+            pending = self._pending_flash
+            self._pending_flash = None
+            GLib.idle_add(self._begin_mapped_flash, pending)
+
+    def cancel_flash(self) -> None:
+        self._pending_flash = None
+        self._remove_tick()
+        self._remove_watchdog()
+        self._done = None
+        self._hide_surface()
+
+    def destroy(self) -> None:
+        self.cancel_flash()
+        self.window.destroy()
+
+    def _begin_mapped_flash(self, pending: tuple[int, Callable[[], None]]) -> bool:
+        if not self.window.get_mapped():
+            # Mapping was lost before the idle callback. Treat it as cancelled.
+            GLib.idle_add(self._invoke_once, pending[1])
+            return GLib.SOURCE_REMOVE
+
+        frames, done = pending
         self._target_frames = max(1, int(frames))
         self._completed_frames = 0
         self._first_tick_seen = False
         self._done = done
 
-        # Changing the visible stack child requests drawing, and the tick callback
-        # keeps the frame clock running. We intentionally do not count the first
-        # tick: tick callbacks run in GTK's Update phase before Paint. The first
-        # tick therefore prepares the first actually visible frame.
-        view.queue_draw()
+        if self._active is not None:
+            self._active.start_animations()
+            self._active.queue_draw()
         self.stack.queue_draw()
         self.window.queue_draw()
+
+        self._make_click_through()
         self._tick_id = self.window.add_tick_callback(self._on_tick)
 
         refresh = self.monitor_info.refresh_hz or 60.0
@@ -150,29 +188,20 @@ class OverlayWindow:
         self._watchdog_id = GLib.timeout_add(watchdog_ms, self._on_watchdog)
 
         LOG.debug(
-            "Flash %s on %s for %d frames (%.2f Hz)",
-            scene_id,
+            "Mapped flash on %s for %d frames (%.2f Hz)",
             self.monitor_info.connector,
             self._target_frames,
             refresh,
         )
-
-    def cancel_flash(self) -> None:
-        self._pending_flash = None
-        self._remove_tick()
-        self._remove_watchdog()
-        self._done = None
-        self._set_blank()
-
-    def destroy(self) -> None:
-        self.cancel_flash()
-        self.window.destroy()
+        return GLib.SOURCE_REMOVE
 
     def _on_tick(self, _widget, _frame_clock) -> bool:
         if self._done is None:
             self._tick_id = None
             return GLib.SOURCE_REMOVE
 
+        # Tick callbacks run in GTK's Update phase before Paint. Do not count the
+        # first tick; it prepares the first frame that can actually be presented.
         if not self._first_tick_seen:
             self._first_tick_seen = True
             self.window.queue_draw()
@@ -187,8 +216,10 @@ class OverlayWindow:
         self._remove_watchdog()
         done = self._done
         self._done = None
-        self._set_blank()
-        # Let GTK finish this frame-clock callback before the scheduler mutates state.
+
+        # Strong clear: unmap the native layer-shell surface. KWin must remove an
+        # unmapped surface, so no previously committed transparent buffer can linger.
+        self._hide_surface()
         GLib.idle_add(self._invoke_once, done)
         return GLib.SOURCE_REMOVE
 
@@ -196,6 +227,7 @@ class OverlayWindow:
         self._watchdog_id = None
         if self._done is None:
             return GLib.SOURCE_REMOVE
+
         LOG.warning(
             "Frame-clock watchdog fired on %s after %d/%d frames",
             self.monitor_info.connector,
@@ -205,23 +237,23 @@ class OverlayWindow:
         self._remove_tick()
         done = self._done
         self._done = None
-        self._set_blank()
+        self._hide_surface()
         GLib.idle_add(self._invoke_once, done)
         return GLib.SOURCE_REMOVE
 
-    def _set_blank(self) -> None:
-        # Do not rely on an empty transparent child to erase the previous Wayland
-        # buffer. Make the entire native toplevel transparent first; Gtk documents
-        # toplevel opacity as supported on Wayland. This also forces a full visual
-        # state change even when the scene graph becomes empty.
-        self.window.set_opacity(0.0)
+    def _hide_surface(self) -> None:
         if self._active is not None:
             self._active.stop_animations()
         self._active = None
+
         if hasattr(self, "stack"):
             self.stack.set_visible_child_name("__blank__")
-        self.window.queue_draw()
-        self._make_click_through()
+
+        self.window.set_opacity(0.0)
+        # This is intentional. We tried keeping a transparent layer-shell surface
+        # mapped, but KWin could retain its last submitted visual buffer. Unmapping
+        # removes the surface from composition during every break.
+        self.window.set_visible(False)
 
     def _remove_tick(self) -> None:
         if self._tick_id is not None:
@@ -245,17 +277,15 @@ class OverlayWindow:
         if self._pending_flash is not None:
             pending = self._pending_flash
             self._pending_flash = None
-            GLib.idle_add(self._start_pending_flash, pending)
+            GLib.idle_add(self._begin_mapped_flash, pending)
+
+    def _on_unmapped(self, *_args) -> None:
+        LOG.debug("Overlay unmapped on %s", self.monitor_info.connector)
 
     def _make_click_through(self, *_args) -> bool:
         surface = self.window.get_surface()
         if surface is not None:
             surface.set_input_region(cairo.Region())
-        return GLib.SOURCE_REMOVE
-
-    def _start_pending_flash(self, pending: tuple[str, int, Callable[[], None]]) -> bool:
-        scene_id, frames, done = pending
-        self.flash_scene(scene_id, frames, done)
         return GLib.SOURCE_REMOVE
 
     @staticmethod
@@ -301,8 +331,6 @@ class OverlayManager:
         self._monitors_handler = None
 
     def sync_monitors(self) -> None:
-        # A hot-plug/display-target change can invalidate frame clocks. Finish the
-        # current presentation cleanly so the scheduler can enter its next break.
         self._abort_presentation(notify=True)
         config: AppConfig = self.get_config()
         infos = enumerate_monitors()
@@ -311,17 +339,19 @@ class OverlayManager:
             for info in infos
             if config.display.mode == "all" or info.connector in config.display.connectors
         }
+
         for key in list(self.windows):
             if key not in wanted:
                 self._mark_window_finished(key)
                 self.windows.pop(key).destroy()
+
         for key, info in wanted.items():
             if key not in self.windows:
                 self.windows[key] = OverlayWindow(self.application, info, self.media)
+
         self.rebuild_scenes()
 
     def rebuild_scenes(self) -> None:
-        # Structural widget replacement invalidates frame callbacks.
         self._abort_presentation(notify=True)
         scenes = self.get_config().scenes
         for window in self.windows.values():
