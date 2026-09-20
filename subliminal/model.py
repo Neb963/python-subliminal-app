@@ -92,7 +92,7 @@ class DisplayConfig:
 
 @dataclass(slots=True)
 class AppConfig:
-    version: int = 2
+    version: int = 3
     start_on_launch: bool = False
     autostart: bool = False
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
@@ -205,7 +205,7 @@ def config_to_dict(config: AppConfig) -> dict:
 
 
 def normalize_config(config: AppConfig) -> None:
-    config.version = 2
+    config.version = 3
     config.schedule.break_ms = max(100, int(config.schedule.break_ms))
     config.schedule.visible_frames = max(1, min(120, int(config.schedule.visible_frames)))
     if config.schedule.selection not in {"random", "sequential"}:
