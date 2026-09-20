@@ -46,8 +46,8 @@ class AppController:
         self._save_timer: int | None = None
         self.scheduler = Scheduler(
             lambda: self.config,
-            self.overlay.show_scene,
-            self.overlay.clear,
+            self.overlay.flash_scene,
+            self.overlay.cancel_flash,
             self._timer_add,
             GLib.source_remove,
             self._state_changed,
@@ -68,7 +68,6 @@ class AppController:
             return
         normalize_config(self.config)
         self.overlay.start()
-        self.overlay.rebuild_scenes()
         self.scheduler.start(immediate=False)
 
     def pause(self) -> None:
@@ -82,18 +81,27 @@ class AppController:
             self.warn("Cannot test: layer-shell is unavailable in this session.")
             return
         self.overlay.start()
-        self.overlay.rebuild_scenes()
         self.scheduler.test_flash(scene)
 
     def config_changed(self, kind: str = "content") -> None:
         normalize_config(self.config)
         self._schedule_save()
+
+        # Replacing scene widgets while a frame-synchronized flash is active would
+        # invalidate its tick callback. Pause/restart around structural changes.
+        was_running = self.scheduler.running
+        if was_running and kind in {"content", "display"}:
+            self.scheduler.pause()
+
         if self.overlay.windows:
             if kind == "display":
                 self.overlay.sync_monitors()
             elif kind == "content":
                 self.overlay.rebuild_scenes()
-        if kind == "timing" and self.scheduler.running:
+
+        if was_running and kind in {"content", "display"}:
+            self.scheduler.start(immediate=False)
+        elif kind == "timing" and self.scheduler.running:
             self.scheduler.reload_config()
 
     def set_autostart(self, enabled: bool) -> None:
