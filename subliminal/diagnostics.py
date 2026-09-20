@@ -4,9 +4,12 @@ import os
 import platform
 import sys
 
+from . import __version__
+
 
 def run_diagnostics() -> int:
     print("Subliminal diagnostics")
+    print(f"Version: {__version__}")
     print(f"Python: {sys.version.split()[0]} ({sys.executable})")
     print(f"System: {platform.platform()}")
     print(f"XDG_SESSION_TYPE: {os.environ.get('XDG_SESSION_TYPE', '<unset>')}")
