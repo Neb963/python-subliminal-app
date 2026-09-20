@@ -15,21 +15,21 @@ class SchedulerState(str, Enum):
 
 
 class Scheduler:
-    """GLib-compatible scheduler with injectable timer functions for unit tests."""
+    """Schedules breaks; the overlay owns frame-synchronized flash lifetime."""
 
     def __init__(
         self,
         get_config: Callable[[], AppConfig],
-        show_scene: Callable[[Scene], None],
-        clear_scene: Callable[[], None],
+        present_scene: Callable[[Scene, int, Callable[[], None]], None],
+        cancel_presentation: Callable[[], None],
         timer_add: Callable[[int, Callable[[], bool]], int],
         source_remove: Callable[[int], None],
         on_state_changed: Callable[[SchedulerState], None] | None = None,
         rng: random.Random | None = None,
     ) -> None:
         self._get_config = get_config
-        self._show_scene = show_scene
-        self._clear_scene = clear_scene
+        self._present_scene = present_scene
+        self._cancel_presentation = cancel_presentation
         self._timer_add = timer_add
         self._source_remove = source_remove
         self._on_state_changed = on_state_changed or (lambda _state: None)
@@ -38,6 +38,7 @@ class Scheduler:
         self._timer_id: int | None = None
         self._sequence_index = 0
         self._last_scene_id: str | None = None
+        self._presentation_generation = 0
 
     @property
     def state(self) -> SchedulerState:
@@ -49,23 +50,23 @@ class Scheduler:
 
     def start(self, immediate: bool = False) -> None:
         self._cancel_timer()
-        self._clear_scene()
+        self._cancel_active_presentation()
         self._set_state(SchedulerState.WAITING)
         if immediate:
             self._begin_flash()
         else:
-            self._schedule_wait()
+            self._schedule_break()
 
     def pause(self) -> None:
         if self._state in {SchedulerState.STOPPED, SchedulerState.PAUSED}:
             return
         self._cancel_timer()
-        self._clear_scene()
+        self._cancel_active_presentation()
         self._set_state(SchedulerState.PAUSED)
 
     def stop(self) -> None:
         self._cancel_timer()
-        self._clear_scene()
+        self._cancel_active_presentation()
         self._sequence_index = 0
         self._last_scene_id = None
         self._set_state(SchedulerState.STOPPED)
@@ -78,27 +79,32 @@ class Scheduler:
         if self.running:
             return
         self._cancel_timer()
+        self._cancel_active_presentation()
         chosen = scene or self._choose_scene()
         if chosen is None:
             return
-        self._show_scene(chosen)
         self._set_state(SchedulerState.VISIBLE)
-        duration = max(1, self._get_config().schedule.duration_ms)
-        self._timer_id = self._timer_add(duration, self._finish_test_flash)
+        generation = self._presentation_generation
+        frames = max(1, self._get_config().schedule.visible_frames)
+        self._present_scene(
+            chosen,
+            frames,
+            lambda: self._finish_test_flash(generation),
+        )
 
-    def _finish_test_flash(self) -> bool:
-        self._timer_id = None
-        self._clear_scene()
-        self._set_state(SchedulerState.PAUSED)
-        return False
+    def _finish_test_flash(self, generation: int) -> None:
+        if generation != self._presentation_generation:
+            return
+        if self._state == SchedulerState.VISIBLE:
+            self._set_state(SchedulerState.PAUSED)
 
-    def _schedule_wait(self) -> None:
+    def _schedule_break(self) -> None:
         if self._state != SchedulerState.WAITING:
             return
-        interval = max(100, self._get_config().schedule.interval_ms)
-        self._timer_id = self._timer_add(interval, self._on_wait_elapsed)
+        delay = max(100, self._get_config().schedule.break_ms)
+        self._timer_id = self._timer_add(delay, self._on_break_elapsed)
 
-    def _on_wait_elapsed(self) -> bool:
+    def _on_break_elapsed(self) -> bool:
         self._timer_id = None
         self._begin_flash()
         return False
@@ -109,19 +115,24 @@ class Scheduler:
         scene = self._choose_scene()
         if scene is None:
             self._set_state(SchedulerState.WAITING)
-            self._schedule_wait()
+            self._schedule_break()
             return
-        self._show_scene(scene)
         self._set_state(SchedulerState.VISIBLE)
-        duration = max(1, self._get_config().schedule.duration_ms)
-        self._timer_id = self._timer_add(duration, self._on_flash_elapsed)
+        generation = self._presentation_generation
+        frames = max(1, self._get_config().schedule.visible_frames)
+        self._present_scene(
+            scene,
+            frames,
+            lambda: self._on_flash_finished(generation),
+        )
 
-    def _on_flash_elapsed(self) -> bool:
-        self._timer_id = None
-        self._clear_scene()
+    def _on_flash_finished(self, generation: int) -> None:
+        if generation != self._presentation_generation:
+            return
+        if self._state != SchedulerState.VISIBLE:
+            return
         self._set_state(SchedulerState.WAITING)
-        self._schedule_wait()
-        return False
+        self._schedule_break()
 
     def _choose_scene(self) -> Scene | None:
         config = self._get_config()
@@ -145,6 +156,10 @@ class Scheduler:
                 self._source_remove(self._timer_id)
             finally:
                 self._timer_id = None
+
+    def _cancel_active_presentation(self) -> None:
+        self._presentation_generation += 1
+        self._cancel_presentation()
 
     def _set_state(self, state: SchedulerState) -> None:
         if state == self._state:
