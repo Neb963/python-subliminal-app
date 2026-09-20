@@ -8,10 +8,10 @@ def test_save_and_load(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     store = ConfigStore(path)
     cfg = default_config()
-    cfg.schedule.interval_ms = 1234
+    cfg.schedule.break_ms = 1234
     store.save(cfg)
     loaded = store.load()
-    assert loaded.schedule.interval_ms == 1234
+    assert loaded.schedule.break_ms == 1234
     assert loaded.scenes[0].layers[0].text == "Focus 🎯"
 
 
