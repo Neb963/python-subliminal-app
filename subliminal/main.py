@@ -4,6 +4,7 @@ import logging
 import sys
 from logging.handlers import RotatingFileHandler
 
+from . import __version__
 from .config import state_dir
 
 
@@ -24,9 +25,16 @@ def configure_logging() -> None:
 
 def main() -> int:
     diagnose = "--diagnose" in sys.argv[1:]
+    show_version = "--version" in sys.argv[1:] or "-V" in sys.argv[1:]
     background = "--background" in sys.argv[1:]
-    argv = [arg for arg in sys.argv if arg not in {"--background", "--diagnose"}]
+    argv = [
+        arg for arg in sys.argv
+        if arg not in {"--background", "--diagnose", "--version", "-V"}
+    ]
     configure_logging()
+    if show_version:
+        print(f"Subliminal {__version__}")
+        return 0
     if diagnose:
         from .diagnostics import run_diagnostics
         return run_diagnostics()
