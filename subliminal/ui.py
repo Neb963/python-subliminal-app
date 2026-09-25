@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import ConfigImportError
-from .gtk_runtime import Gdk, Gtk, Pango
+from .gtk_runtime import Gdk, GLib, Gtk, Pango
 from .model import ANCHORS, Folder, ImageLayer, Scene, TextLayer, new_id
 from .render import SceneView
 
@@ -229,6 +229,9 @@ class EditorPage(Gtk.Box):
         self._loading = False
         self._preview_view: SceneView | None = None
         self._folder_choices: list[str | None] = []
+        self._library_refresh_id: int | None = None
+        self._folder_model_refresh_id: int | None = None
+        self._preview_refresh_id: int | None = None
 
         outer = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
         outer.set_hexpand(True)
@@ -435,10 +438,12 @@ class EditorPage(Gtk.Box):
         self.text_view.get_buffer().connect("changed", self._update_text)
         row = self._attach(grid, row, "Text", text_scroll)
 
-        self.font_button = Gtk.FontButton()
+        self.font_dialog = Gtk.FontDialog.new()
+        self.font_dialog.set_title("Choose font")
+        self.font_button = Gtk.FontDialogButton.new(self.font_dialog)
         self.font_button.set_use_font(True)
         self.font_button.set_use_size(False)
-        self.font_button.connect("font-set", self._update_text)
+        self.font_button.connect("notify::font-desc", self._update_text)
         row = self._attach(grid, row, "Font", self.font_button)
 
         self.font_size = Gtk.SpinButton.new_with_range(1, 500, 1)
@@ -750,7 +755,8 @@ class EditorPage(Gtk.Box):
             return
         self.controller.config_changed("metadata")
         self._refresh_library_row_labels()
-        self._refresh_folder_dropdown()
+        if folder is not None:
+            self._schedule_folder_model_refresh()
 
     def _refresh_library_row_labels(self) -> None:
         for row in self._rows(self.library_list):
@@ -807,7 +813,7 @@ class EditorPage(Gtk.Box):
         if scene is None:
             return
         scene.enabled = button.get_active()
-        self.controller.config_changed("content")
+        self.controller.config_changed("visual")
 
     def _scene_folder_changed(self, dropdown, *_args) -> None:
         if self._loading:
@@ -818,9 +824,77 @@ class EditorPage(Gtk.Box):
         index = dropdown.get_selected()
         if index >= len(self._folder_choices):
             index = 0
-        scene.folder_id = self._folder_choices[index]
+        new_folder_id = self._folder_choices[index]
+        if scene.folder_id == new_folder_id:
+            return
+        scene.folder_id = new_folder_id
         self.controller.config_changed("metadata")
-        self.refresh()
+        # Never rebuild list/dropdown models from inside notify::selected.
+        # GTK is still iterating the dropdown model at this point.
+        self._schedule_library_refresh(scene.id)
+
+    def _schedule_library_refresh(self, scene_id: str | None = None) -> None:
+        if self._library_refresh_id is not None:
+            GLib.source_remove(self._library_refresh_id)
+        self._library_refresh_id = GLib.idle_add(
+            self._run_library_refresh,
+            scene_id,
+        )
+
+    def _run_library_refresh(self, scene_id: str | None) -> bool:
+        self._library_refresh_id = None
+        if scene_id is not None:
+            self._scene_id = scene_id
+            self._folder_id = None
+        self._refresh_library_only()
+        return GLib.SOURCE_REMOVE
+
+    def _refresh_library_only(self) -> None:
+        selected_scene = self._scene_id
+        selected_folder = self._folder_id
+        self._loading = True
+        try:
+            self._clear_listbox(self.library_list)
+            for folder in self.controller.config.folders:
+                self.library_list.append(self._folder_row(folder))
+                for scene in self.controller.config.scenes:
+                    if scene.folder_id == folder.id:
+                        self.library_list.append(self._scene_row(scene))
+            self.library_list.append(self._unfiled_row())
+            for scene in self.controller.config.scenes:
+                if scene.folder_id is None:
+                    self.library_list.append(self._scene_row(scene))
+        finally:
+            self._loading = False
+
+        target = None
+        if selected_scene is not None:
+            target = self._row_with_attr(
+                self.library_list,
+                "scene_id",
+                selected_scene,
+            )
+        elif selected_folder is not None:
+            target = self._row_with_attr(
+                self.library_list,
+                "folder_id",
+                selected_folder,
+            )
+        if target is not None:
+            self.library_list.select_row(target)
+
+    def _schedule_folder_model_refresh(self) -> None:
+        if self._folder_model_refresh_id is not None:
+            GLib.source_remove(self._folder_model_refresh_id)
+        self._folder_model_refresh_id = GLib.timeout_add(
+            80,
+            self._run_folder_model_refresh,
+        )
+
+    def _run_folder_model_refresh(self) -> bool:
+        self._folder_model_refresh_id = None
+        self._refresh_folder_dropdown()
+        return GLib.SOURCE_REMOVE
 
     def _refresh_layers(self) -> None:
         previous = self._layer_id
@@ -866,7 +940,10 @@ class EditorPage(Gtk.Box):
                 self.text_name.set_text(layer.name)
                 self.text_enabled.set_active(layer.enabled)
                 self.text_view.get_buffer().set_text(layer.text)
-                self.font_button.set_font(f"{layer.font_family} 12")
+                font_desc = Pango.FontDescription.new()
+                font_desc.set_family(layer.font_family)
+                font_desc.set_size(12 * Pango.SCALE)
+                self.font_button.set_font_desc(font_desc)
                 self.font_size.set_value(layer.font_size_px)
                 self.bold.set_active(layer.bold)
                 self.italic.set_active(layer.italic)
@@ -949,10 +1026,12 @@ class EditorPage(Gtk.Box):
         start, end = self.text_view.get_buffer().get_bounds()
         layer.text = self.text_view.get_buffer().get_text(start, end, True)
         layer.enabled = self.text_enabled.get_active()
-        desc = Pango.FontDescription.from_string(
-            self.font_button.get_font() or "Sans 12"
+        desc = self.font_button.get_font_desc()
+        layer.font_family = (
+            desc.get_family()
+            if desc is not None and desc.get_family()
+            else "Sans"
         )
-        layer.font_family = desc.get_family() or "Sans"
         layer.font_size_px = self.font_size.get_value_as_int()
         layer.bold = self.bold.get_active()
         layer.italic = self.italic.get_active()
@@ -990,9 +1069,9 @@ class EditorPage(Gtk.Box):
         self._changed_layer()
 
     def _changed_layer(self) -> None:
-        self.controller.config_changed("content")
+        self.controller.config_changed("visual")
         self._refresh_layer_label()
-        self._refresh_preview()
+        self._request_preview_refresh()
 
     def _refresh_layer_label(self) -> None:
         row = self.layer_list.get_selected_row()
@@ -1009,25 +1088,42 @@ class EditorPage(Gtk.Box):
         self.image_height.set_sensitive(not self.auto_height.get_active())
         self._update_image()
 
-    def _refresh_preview(self) -> None:
-        if self._preview_view is not None:
-            self._preview_view.stop_animations()
-            self._preview_view = None
+    def _request_preview_refresh(self, delay_ms: int = 75) -> None:
+        if self._preview_refresh_id is not None:
+            GLib.source_remove(self._preview_refresh_id)
+        self._preview_refresh_id = GLib.timeout_add(
+            delay_ms,
+            self._run_preview_refresh,
+        )
 
+    def _run_preview_refresh(self) -> bool:
+        self._preview_refresh_id = None
+        self._refresh_preview()
+        return GLib.SOURCE_REMOVE
+
+    def _refresh_preview(self) -> None:
         scene = self.selected_scene()
         if scene is None:
+            if self._preview_view is not None:
+                self._preview_view.stop_animations()
+                self._preview_view = None
             self.preview_frame.set_child(Gtk.Label(label="Select a scene"))
             return
 
+        # Build the replacement first. SceneView remains hidden until it has a
+        # valid layout, so the old preview can stay visible during construction.
         view = SceneView(
             scene,
             self.controller.overlay.media,
             scale=0.33,
             preview=True,
         )
+        old_view = self._preview_view
         self._preview_view = view
         self.preview_frame.set_child(view)
         view.start_animations()
+        if old_view is not None:
+            old_view.stop_animations()
 
     def _add_folder(self, *_args) -> None:
         folder = Folder(name=f"Folder {len(self.controller.config.folders) + 1}")
@@ -1056,7 +1152,7 @@ class EditorPage(Gtk.Box):
         self._scene_id = scene.id
         self._folder_id = None
         self._layer_id = scene.layers[0].id
-        self.controller.config_changed("content")
+        self.controller.config_changed("structural")
         self.refresh()
 
     def _duplicate_scene(self, *_args) -> None:
@@ -1071,7 +1167,7 @@ class EditorPage(Gtk.Box):
         self.controller.config.scenes.append(duplicate)
         self._scene_id = duplicate.id
         self._folder_id = None
-        self.controller.config_changed("content")
+        self.controller.config_changed("structural")
         self.refresh()
 
     def _delete_library_item(self, *_args) -> None:
@@ -1088,7 +1184,7 @@ class EditorPage(Gtk.Box):
             ]
             self._scene_id = None
             self._layer_id = None
-            self.controller.config_changed("content")
+            self.controller.config_changed("structural")
             self.refresh()
             return
 
@@ -1114,7 +1210,7 @@ class EditorPage(Gtk.Box):
         )
         scene.layers.append(layer)
         self._layer_id = layer.id
-        self.controller.config_changed("content")
+        self.controller.config_changed("structural")
         self._refresh_layers()
         self._refresh_preview()
 
@@ -1185,7 +1281,7 @@ class EditorPage(Gtk.Box):
             )
             scene.layers.append(layer)
             self._layer_id = layer.id
-            self.controller.config_changed("content")
+            self.controller.config_changed("structural")
             self._refresh_layers()
             self._refresh_preview()
         finally:
@@ -1218,7 +1314,7 @@ class EditorPage(Gtk.Box):
             if layer.id != self._layer_id
         ]
         self._layer_id = None
-        self.controller.config_changed("content")
+        self.controller.config_changed("structural")
         self._refresh_layers()
         self._refresh_properties()
         self._refresh_preview()
@@ -1241,7 +1337,7 @@ class EditorPage(Gtk.Box):
             return
         layer = scene.layers.pop(index)
         scene.layers.insert(new_index, layer)
-        self.controller.config_changed("content")
+        self.controller.config_changed("structural")
         self._refresh_layers()
         self._refresh_preview()
 
