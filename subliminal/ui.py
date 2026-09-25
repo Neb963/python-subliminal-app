@@ -453,6 +453,7 @@ class EditorPage(Gtk.Box):
         self.font_dialog = Gtk.FontDialog.new()
         self.font_dialog.set_title("Choose font")
         self.font_button = Gtk.FontDialogButton.new(self.font_dialog)
+        self.font_button.set_level(Gtk.FontLevel.FAMILY)
         self.font_button.set_use_font(True)
         self.font_button.set_use_size(False)
         self.font_button.connect("notify::font-desc", self._update_text)
