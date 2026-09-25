@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,11 +26,34 @@ class MediaAsset:
 
 
 class MediaCache:
+    MAX_ENTRIES = 48
+    MAX_APPROX_BYTES = 256 * 1024 * 1024
+
     def __init__(self) -> None:
-        self._cache: dict[tuple, MediaAsset] = {}
+        self._cache: OrderedDict[tuple, MediaAsset] = OrderedDict()
+        self._approx_bytes = 0
 
     def clear(self) -> None:
         self._cache.clear()
+        self._approx_bytes = 0
+
+    @staticmethod
+    def _asset_bytes(asset: MediaAsset) -> int:
+        # Textures are RGBA8 in the Pillow path; SVG/GdkPixbuf is comparable.
+        return max(1, asset.width) * max(1, asset.height) * 4 * max(1, len(asset.frames))
+
+    def _remember(self, key: tuple, asset: MediaAsset) -> None:
+        existing = self._cache.pop(key, None)
+        if existing is not None:
+            self._approx_bytes -= self._asset_bytes(existing)
+        self._cache[key] = asset
+        self._approx_bytes += self._asset_bytes(asset)
+        while (
+            len(self._cache) > self.MAX_ENTRIES
+            or self._approx_bytes > self.MAX_APPROX_BYTES
+        ) and len(self._cache) > 1:
+            _, old = self._cache.popitem(last=False)
+            self._approx_bytes -= self._asset_bytes(old)
 
     def load(
         self,
@@ -59,6 +83,7 @@ class MediaCache:
         )
         cached = self._cache.get(key)
         if cached is not None:
+            self._cache.move_to_end(key)
             return cached
         if path.suffix.lower() == ".svg":
             asset = self._load_svg(
@@ -78,7 +103,7 @@ class MediaCache:
                 max_width=max_width,
                 max_height=max_height,
             )
-        self._cache[key] = asset
+        self._remember(key, asset)
         return asset
 
     def _load_svg(
