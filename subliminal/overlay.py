@@ -139,7 +139,9 @@ class OverlayWindow:
         self._completed_frames = 0
         self._first_tick_seen = False
         self._pending_flash = (self._target_frames, done)
-        self.window.set_opacity(1.0)
+        # Map invisibly first. The real allocation can differ from monitor
+        # geometry under scaling; reveal only after the mapped layout is final.
+        self.window.set_opacity(0.0)
 
         view.queue_draw()
         self.stack.queue_draw()
@@ -188,6 +190,9 @@ class OverlayWindow:
         self.window.queue_draw()
 
         self._make_click_through()
+        # From this point onward every visible frame has final positions/sizes.
+        self.window.set_opacity(1.0)
+        self.window.queue_draw()
         self._tick_id = self.window.add_tick_callback(self._on_tick)
 
         refresh = self.monitor_info.refresh_hz or 60.0
