@@ -133,27 +133,38 @@ class MediaCache:
         max_width: int | None = None,
         max_height: int | None = None,
     ) -> tuple[int, int]:
-        if width is None and height is None:
-            return src_w, src_h
-        if width is None:
+        auto_both = width is None and height is None
+        if auto_both:
+            width, height = src_w, src_h
+        elif width is None:
             width = max(1, round(src_w * (height / src_h)))
-        if height is None:
+        elif height is None:
             height = max(1, round(src_h * (width / src_w)))
-        if not keep_aspect:
-            target_w, target_h = max(1, width), max(1, height)
-            if max_width is not None:
-                target_w = min(target_w, max_width)
-            if max_height is not None:
-                target_h = min(target_h, max_height)
-            return target_w, target_h
 
-        ratio = min(width / src_w, height / src_h)
+        assert width is not None and height is not None
+
+        # Auto sizing means "use the source dimensions", so monitor limiting must
+        # preserve the source aspect ratio even when the layer's explicit
+        # keep-aspect toggle is off.
+        if keep_aspect or auto_both:
+            ratio = min(width / src_w, height / src_h)
+            if auto_both:
+                ratio = min(1.0, ratio)
+            if max_width is not None:
+                ratio = min(ratio, max_width / src_w)
+            if max_height is not None:
+                ratio = min(ratio, max_height / src_h)
+            return (
+                max(1, round(src_w * ratio)),
+                max(1, round(src_h * ratio)),
+            )
+
+        target_w, target_h = max(1, width), max(1, height)
         if max_width is not None:
-            ratio = min(ratio, max_width / src_w)
+            target_w = min(target_w, max_width)
         if max_height is not None:
-            ratio = min(ratio, max_height / src_h)
-        ratio = min(1.0 if width == src_w and height == src_h else ratio, ratio)
-        return max(1, round(src_w * ratio)), max(1, round(src_h * ratio))
+            target_h = min(target_h, max_height)
+        return target_w, target_h
 
     @staticmethod
     def _texture_from_rgba(image: Image.Image):
