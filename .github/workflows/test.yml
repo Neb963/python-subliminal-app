@@ -89,6 +89,7 @@ jobs:
           PY
       - name: Prepare headless GTK session
         run: |
+          rm -f /etc/machine-id
           dbus-uuidgen --ensure=/etc/machine-id
           test -s /etc/machine-id
           ldconfig -p | grep -F 'libGLESv2.so.2'
