@@ -149,28 +149,45 @@ def smoke_layout_allocations() -> None:
 
         width = max(1, view.get_width())
         height = max(1, view.get_height())
-        view.prepare_flash(width, height)
-        drain(50)
+        for _ in range(80):
+            view.prepare_flash(width, height)
+            drain(2)
 
-        for rendered in view._layers:
-            child = rendered.widget
-            x, y = view.get_child_position(child)
-            child_w = child.get_width()
-            child_h = child.get_height()
-            assert x >= -0.01, (rendered.model.name, x, y, child_w, child_h)
-            assert y >= -0.01, (rendered.model.name, x, y, child_w, child_h)
-            assert x + child_w <= width + 0.01, (
-                rendered.model.name,
-                x,
-                child_w,
-                width,
-            )
-            assert y + child_h <= height + 0.01, (
-                rendered.model.name,
-                y,
-                child_h,
-                height,
-            )
+            for rendered in view._layers:
+                child = rendered.widget
+                x, y = view.get_child_position(child)
+                child_w = child.get_width()
+                child_h = child.get_height()
+                assert x >= -0.01, (
+                    rendered.model.name,
+                    x,
+                    y,
+                    child_w,
+                    child_h,
+                )
+                assert y >= -0.01, (
+                    rendered.model.name,
+                    x,
+                    y,
+                    child_w,
+                    child_h,
+                )
+                assert x + child_w <= width + 0.01, (
+                    rendered.model.name,
+                    x,
+                    child_w,
+                    width,
+                )
+                assert y + child_h <= height + 0.01, (
+                    rendered.model.name,
+                    y,
+                    child_h,
+                    height,
+                )
+
+        text_widget = view._layers[0].widget
+        assert text_widget.label.get_justify() == Gtk.Justification.RIGHT
+        assert text_widget.label.get_margin_start() > 0
 
         window.destroy()
         drain()
