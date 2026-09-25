@@ -30,7 +30,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Fedora runtime
         run: |
-          dnf install -y             python3             python3-gobject             gtk4             gtk4-layer-shell             python3-cairo             python3-pillow             gdk-pixbuf2             librsvg2             xorg-x11-server-Xvfb             xorg-x11-xauth
+          dnf install -y \
+            python3 \
+            python3-gobject \
+            gtk4 \
+            gtk4-layer-shell \
+            python3-cairo \
+            python3-pillow \
+            gdk-pixbuf2 \
+            librsvg2 \
+            xorg-x11-server-Xvfb \
+            xorg-x11-xauth \
+            libglvnd-gles \
+            dbus-daemon \
+            dbus-tools
       - name: Verify GI APIs used by the application
         run: |
           python3 - <<'PY'
@@ -56,7 +69,9 @@ jobs:
           assert model.get_string(1) == "B"
 
           provider = Gtk.CssProvider()
-          provider.load_from_data(b"box { background-color: rgba(0,0,0,0.5); }")
+          provider.load_from_data(
+              b"box { background-color: rgba(0,0,0,0.5); }"
+          )
           PY
       - name: Verify media sizing edge cases
         run: |
@@ -76,7 +91,9 @@ jobs:
         run: |
           dbus-uuidgen --ensure=/etc/machine-id
           test -s /etc/machine-id
-          test -e /usr/lib64/libGLESv2.so.2
+          ldconfig -p | grep -F 'libGLESv2.so.2'
+          command -v dbus-run-session
+          command -v xvfb-run
       - name: Run GTK editor and allocation smoke checks
         run: |
           dbus-run-session -- \
