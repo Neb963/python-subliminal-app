@@ -6,9 +6,9 @@ The compositor-facing implementation remains deliberately small: GTK4 + PyGObjec
 
 ## Current release
 
-**1.4.0**
+**1.4.1**
 
-Version 1.4 is primarily a stability/layout release. It fixes editor freezes around folders and font selection, prevents temporary top-left preview piles, enforces screen-safe layer placement, and adds text backgrounds and independent text alignment.
+Version 1.4.1 is primarily a stability/layout release. It fixes editor freezes around folders and font selection, prevents temporary top-left preview piles, enforces screen-safe layer placement, adds text backgrounds and independent text alignment, and hardens SVG rasterization so extreme or stretched SVGs remain bounded before allocation.
 
 ## Features
 
