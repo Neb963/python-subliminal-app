@@ -22,3 +22,47 @@ jobs:
         run: python -m compileall -q subliminal
       - name: Check shell syntax
         run: bash -n install.sh run.sh uninstall.sh
+
+  fedora-runtime:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Fedora runtime
+        run: |
+          dnf install -y             python3             python3-gobject             gtk4             gtk4-layer-shell             python3-cairo             python3-pillow             gdk-pixbuf2             librsvg2
+      - name: Verify GI APIs used by the application
+        run: |
+          python3 - <<'PY'
+          import ctypes
+          ctypes.CDLL("libgtk4-layer-shell.so.0", mode=ctypes.RTLD_GLOBAL)
+          import gi
+          gi.require_version("Gtk", "4.0")
+          gi.require_version("Gtk4LayerShell", "1.0")
+          from gi.repository import Gtk, Gtk4LayerShell, Pango
+
+          assert hasattr(Gtk, "FontDialog")
+          assert hasattr(Gtk, "FontDialogButton")
+          assert hasattr(Gtk, "FontLevel")
+          assert hasattr(Gtk.FontDialogButton, "new")
+          assert hasattr(Gtk.FontDialogButton, "get_font_desc")
+          assert hasattr(Gtk.FontDialogButton, "set_font_desc")
+          assert hasattr(Pango, "attr_foreground_alpha_new")
+          assert Gtk4LayerShell is not None
+          PY
+      - name: Verify media sizing edge cases
+        run: |
+          PYTHONPATH=. python3 - <<'PY'
+          from subliminal.media import MediaCache
+
+          assert MediaCache._target_size(
+              20000, 10000, None, None, True,
+              max_width=1920, max_height=1080,
+          ) == (1920, 960)
+          assert MediaCache._target_size(
+              4000, 3000, 8000, 2000, False,
+              max_width=1920, max_height=1080,
+          ) == (1920, 1080)
+          PY
+      - name: Compile against Fedora system Python
+        run: PYTHONPATH=. python3 -m compileall -q subliminal
