@@ -889,7 +889,7 @@ class EditorPage(Gtk.Box):
         if scene is None:
             return
         scene.enabled = button.get_active()
-        self.controller.config_changed("visual")
+        self.controller.config_changed("metadata")
 
     def _scene_folder_changed(self, dropdown, *_args) -> None:
         if self._loading:
@@ -1211,7 +1211,7 @@ class EditorPage(Gtk.Box):
         self._changed_layer()
 
     def _changed_layer(self) -> None:
-        self.controller.config_changed("visual")
+        self.controller.config_changed("visual", self._scene_id)
         self._refresh_layer_label()
         self._request_preview_refresh()
 
@@ -1294,7 +1294,7 @@ class EditorPage(Gtk.Box):
         self._scene_id = scene.id
         self._folder_id = None
         self._layer_id = scene.layers[0].id
-        self.controller.config_changed("structural")
+        self.controller.config_changed("structural", scene.id)
         self.refresh()
 
     def _duplicate_scene(self, *_args) -> None:
@@ -1309,7 +1309,7 @@ class EditorPage(Gtk.Box):
         self.controller.config.scenes.append(duplicate)
         self._scene_id = duplicate.id
         self._folder_id = None
-        self.controller.config_changed("structural")
+        self.controller.config_changed("structural", duplicate.id)
         self.refresh()
 
     def _delete_library_item(self, *_args) -> None:
@@ -1320,13 +1320,14 @@ class EditorPage(Gtk.Box):
             if len(self.controller.config.scenes) <= 1:
                 self.controller.warn("At least one scene must remain.")
                 return
+            deleted_scene_id = scene.id
             self.controller.config.scenes[:] = [
                 item for item in self.controller.config.scenes
-                if item.id != scene.id
+                if item.id != deleted_scene_id
             ]
             self._scene_id = None
             self._layer_id = None
-            self.controller.config_changed("structural")
+            self.controller.config_changed("structural", deleted_scene_id)
             self.refresh()
             return
 
@@ -1352,7 +1353,7 @@ class EditorPage(Gtk.Box):
         )
         scene.layers.append(layer)
         self._layer_id = layer.id
-        self.controller.config_changed("structural")
+        self.controller.config_changed("structural", scene.id)
         self._refresh_layers()
         self._refresh_preview()
 
@@ -1423,7 +1424,7 @@ class EditorPage(Gtk.Box):
             )
             scene.layers.append(layer)
             self._layer_id = layer.id
-            self.controller.config_changed("structural")
+            self.controller.config_changed("structural", scene.id)
             self._refresh_layers()
             self._refresh_preview()
         finally:
@@ -1456,7 +1457,7 @@ class EditorPage(Gtk.Box):
             if layer.id != self._layer_id
         ]
         self._layer_id = None
-        self.controller.config_changed("structural")
+        self.controller.config_changed("structural", scene.id)
         self._refresh_layers()
         self._refresh_properties()
         self._refresh_preview()
@@ -1479,7 +1480,7 @@ class EditorPage(Gtk.Box):
             return
         layer = scene.layers.pop(index)
         scene.layers.insert(new_index, layer)
-        self.controller.config_changed("structural")
+        self.controller.config_changed("structural", scene.id)
         self._refresh_layers()
         self._refresh_preview()
 
