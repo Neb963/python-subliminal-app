@@ -215,6 +215,29 @@ def smoke_layout_allocations() -> None:
         assert svg_asset.width <= 800
         assert svg_asset.height <= 600
 
+        square_svg = Path(temp) / "square.svg"
+        square_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="100" height="100" viewBox="0 0 100 100">'
+            '<rect width="100" height="100" fill="blue"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+        stretched = ImageLayer(
+            name="Stretched SVG",
+            path=str(square_svg),
+            width_px=500,
+            height_px=100,
+            keep_aspect_ratio=False,
+        )
+        stretched_asset = MediaCache().load(
+            stretched,
+            1.0,
+            max_width=800,
+            max_height=600,
+        )
+        assert (stretched_asset.width, stretched_asset.height) == (500, 100)
+
         window.destroy()
         drain()
 
