@@ -61,7 +61,14 @@ class MediaCache:
         if cached is not None:
             return cached
         if path.suffix.lower() == ".svg":
-            asset = self._load_svg(path, width, height, layer.keep_aspect_ratio)
+            asset = self._load_svg(
+                path,
+                width,
+                height,
+                layer.keep_aspect_ratio,
+                max_width=max_width,
+                max_height=max_height,
+            )
         else:
             asset = self._load_pillow(
                 path,
@@ -74,15 +81,66 @@ class MediaCache:
         self._cache[key] = asset
         return asset
 
-    def _load_svg(self, path: Path, width: int | None, height: int | None, keep_aspect: bool) -> MediaAsset:
-        if width is None and height is None:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
+    def _load_svg(
+        self,
+        path: Path,
+        width: int | None,
+        height: int | None,
+        keep_aspect: bool,
+        *,
+        max_width: int | None = None,
+        max_height: int | None = None,
+    ) -> MediaAsset:
+        # GdkPixbuf rasterizes SVG during load. Apply monitor limits here, before
+        # allocation, rather than creating a huge bitmap and shrinking it later.
+        requested_w = width
+        requested_h = height
+
+        if requested_w is None and requested_h is None:
+            if max_width is None and max_height is None:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
+            else:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    str(path),
+                    max_width or -1,
+                    max_height or -1,
+                    True,
+                )
         else:
+            target_w = requested_w or -1
+            target_h = requested_h or -1
+            if max_width is not None and target_w > 0:
+                target_w = min(target_w, max_width)
+            if max_height is not None and target_h > 0:
+                target_h = min(target_h, max_height)
+
+            # If only one dimension is explicit, bound the implicit dimension as
+            # well by loading into the monitor box with aspect preservation.
+            if keep_aspect and max_width is not None and max_height is not None:
+                if requested_w is None or requested_h is None:
+                    target_w = min(
+                        requested_w or max_width,
+                        max_width,
+                    )
+                    target_h = min(
+                        requested_h or max_height,
+                        max_height,
+                    )
+
             pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                str(path), width or -1, height or -1, keep_aspect
+                str(path),
+                target_w,
+                target_h,
+                keep_aspect,
             )
+
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-        return MediaAsset(texture.get_width(), texture.get_height(), [texture], [0])
+        return MediaAsset(
+            texture.get_width(),
+            texture.get_height(),
+            [texture],
+            [0],
+        )
 
     def _load_pillow(
         self,
