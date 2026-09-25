@@ -45,6 +45,8 @@ class AppController:
         self.overlay = OverlayManager(application, lambda: self.config)
         self.window: MainWindow | None = None
         self._save_timer: int | None = None
+        self._overlay_rebuild_timer: int | None = None
+        self._overlay_dirty = False
         self.scheduler = Scheduler(
             lambda: self.config,
             self.overlay.flash_scene,
@@ -84,26 +86,57 @@ class AppController:
         self.overlay.start()
         self.scheduler.test_flash(scene)
 
-    def config_changed(self, kind: str = "content") -> None:
+    def config_changed(self, kind: str = "visual") -> None:
+        """Persist changes without turning ordinary editor signals into app restarts.
+
+        Kinds:
+          metadata  - names/folders only; renderer is unaffected
+          visual    - text/font/color/position/image property changed
+          structural- scene/layer membership/order changed
+          display   - monitor targeting changed
+          timing    - scheduler timing changed
+          settings  - startup/autostart preferences changed
+        """
         normalize_config(self.config)
         self._schedule_save()
 
-        # Replacing scene widgets while a frame-synchronized flash is active would
-        # invalidate its tick callback. Pause/restart around structural changes.
-        was_running = self.scheduler.running
-        if was_running and kind in {"content", "display"}:
-            self.scheduler.pause()
-
-        if self.overlay.windows:
-            if kind == "display":
-                self.overlay.sync_monitors()
-            elif kind == "content":
-                self.overlay.rebuild_scenes()
-
-        if was_running and kind in {"content", "display"}:
-            self.scheduler.start(immediate=False)
+        if kind in {"visual", "structural", "content"}:
+            self._schedule_overlay_rebuild()
+        elif kind == "display":
+            was_running = self.scheduler.running
+            if was_running:
+                self.scheduler.pause()
+            self.overlay.sync_monitors()
+            if was_running:
+                self.scheduler.start(immediate=False)
         elif kind == "timing" and self.scheduler.running:
             self.scheduler.reload_config()
+
+    def _schedule_overlay_rebuild(self) -> None:
+        if not self.overlay.windows:
+            return
+        self._overlay_dirty = True
+        if self._overlay_rebuild_timer is None:
+            self._overlay_rebuild_timer = GLib.timeout_add(
+                100,
+                self._try_overlay_rebuild,
+            )
+
+    def _try_overlay_rebuild(self) -> bool:
+        if not self._overlay_dirty:
+            self._overlay_rebuild_timer = None
+            return GLib.SOURCE_REMOVE
+        # Never replace SceneView widgets while a flash is using their frame clock.
+        # Waiting/stopped/paused are safe and require no scheduler restart.
+        if self.scheduler.state == SchedulerState.VISIBLE:
+            return GLib.SOURCE_CONTINUE
+        try:
+            self.overlay.rebuild_scenes()
+            self._overlay_dirty = False
+        except Exception:
+            LOG.exception("Failed to rebuild overlay scenes")
+        self._overlay_rebuild_timer = None
+        return GLib.SOURCE_REMOVE
 
     def export_to(self, path: Path) -> None:
         export_config(self.config, path)
@@ -155,6 +188,9 @@ class AppController:
         self.application.quit()
 
     def shutdown(self) -> None:
+        if self._overlay_rebuild_timer is not None:
+            GLib.source_remove(self._overlay_rebuild_timer)
+            self._overlay_rebuild_timer = None
         try:
             self.save_now()
         except Exception:
@@ -183,6 +219,12 @@ class AppController:
     def _state_changed(self, state: SchedulerState) -> None:
         if self.window is not None:
             self.window.set_runtime_state(state.value)
+        if (
+            state != SchedulerState.VISIBLE
+            and self._overlay_dirty
+            and self._overlay_rebuild_timer is None
+        ):
+            self._overlay_rebuild_timer = GLib.idle_add(self._try_overlay_rebuild)
 
 
 class SubliminalApplication(Gtk.Application):
