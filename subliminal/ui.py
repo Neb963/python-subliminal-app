@@ -1254,11 +1254,24 @@ class EditorPage(Gtk.Box):
 
         # Build the replacement first. SceneView remains hidden until it has a
         # valid layout, so the old preview can stay visible during construction.
+        preview_scale = 0.33
+        preview_width = self.preview_frame.get_width()
+        preview_height = self.preview_frame.get_height()
+        if preview_width > 10 and preview_height > 10:
+            render_limit = (
+                max(1, round(preview_width / preview_scale)),
+                max(1, round(preview_height / preview_scale)),
+            )
+        else:
+            # Safe startup fallback before the preview frame is allocated.
+            render_limit = (1920, 1080)
+
         view = SceneView(
             scene,
             self.controller.overlay.media,
-            scale=0.33,
+            scale=preview_scale,
             preview=True,
+            render_limit=render_limit,
         )
         old_view = self._preview_view
         self._preview_view = view
