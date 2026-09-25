@@ -112,3 +112,38 @@ def test_random_position_fallback_stays_on_screen() -> None:
     )
     assert 8 <= x <= 192
     assert 8 <= y <= 142
+
+
+def test_text_background_and_alignment_defaults_migrate() -> None:
+    cfg = config_from_dict({
+        "version": 4,
+        "scenes": [{
+            "name": "Legacy text",
+            "layers": [{"kind": "text", "text": "hello"}],
+        }],
+    })
+    layer = cfg.scenes[0].layers[0]
+    assert layer.alignment == "left"
+    assert layer.background_enabled is False
+    assert layer.background_color == "#00000099"
+    assert layer.background_padding_px == 8
+
+
+def test_invalid_text_visual_values_are_normalized() -> None:
+    cfg = config_from_dict({
+        "scenes": [{
+            "name": "Bad values",
+            "layers": [{
+                "kind": "text",
+                "text": "hello",
+                "alignment": "diagonal",
+                "background_enabled": True,
+                "background_color": "not-a-color",
+                "background_padding_px": 999999,
+            }],
+        }],
+    })
+    layer = cfg.scenes[0].layers[0]
+    assert layer.alignment == "left"
+    assert layer.background_color == "#00000099"
+    assert layer.background_padding_px == 500
