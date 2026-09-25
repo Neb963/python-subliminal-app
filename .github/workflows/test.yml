@@ -97,7 +97,8 @@ jobs:
           command -v xvfb-run
       - name: Run GTK editor and allocation smoke checks
         run: |
-          dbus-run-session -- \
+          timeout 90s \
+            dbus-run-session -- \
             xvfb-run -a \
             env PYTHONPATH=. GSK_RENDERER=cairo NO_AT_BRIDGE=1 \
             python3 tools/gtk_smoke.py
