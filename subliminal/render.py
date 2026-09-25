@@ -403,25 +403,31 @@ class SceneView(Gtk.Fixed):
         if width <= 1 or height <= 1:
             return
 
-        margin = max(4.0, SAFE_MARGIN_PX * self.scale)
-        bounds = safe_rect(width, height, margin)
+        screen_bounds = safe_rect(width, height, 0.0)
+        random_margin = max(4.0, SAFE_MARGIN_PX * self.scale)
+        random_bounds = safe_rect(width, height, random_margin)
 
-        measured = [
-            (
-                rendered,
-                *self._fit_layer(
-                    rendered,
-                    bounds.width,
-                    bounds.height,
-                ),
+        measured: list[tuple[RenderedLayer, float, float]] = []
+        for rendered in self._layers:
+            target_bounds = (
+                random_bounds
+                if rendered.model.position.randomize
+                else screen_bounds
             )
-            for rendered in self._layers
-        ]
-        occupied: list[RectTuple] = []
-        placements: list[tuple[RenderedLayer, float, float, float, float]] = []
+            item_w, item_h = self._fit_layer(
+                rendered,
+                target_bounds.width,
+                target_bounds.height,
+            )
+            measured.append((rendered, item_w, item_h))
 
-        # Fixed layers are obstacles for randomized layers. Fixed layers may
-        # intentionally overlap one another, but each one is independently clamped.
+        occupied: list[RectTuple] = []
+        placements: list[
+            tuple[RenderedLayer, float, float, float, float, object]
+        ] = []
+
+        # Fixed coordinates retain exact edge semantics (0% can touch x/y=0),
+        # while clamping still prevents any portion from escaping the screen.
         for rendered, item_w, item_h in measured:
             if rendered.model.position.randomize:
                 continue
@@ -429,10 +435,12 @@ class SceneView(Gtk.Fixed):
                 rendered.model.position,
                 item_w,
                 item_h,
-                bounds,
+                screen_bounds,
                 scale=self.scale,
             )
-            placements.append((rendered, x, y, item_w, item_h))
+            placements.append(
+                (rendered, x, y, item_w, item_h, screen_bounds)
+            )
             occupied.append((x, y, item_w, item_h))
 
         spacing = max(4.0, RANDOM_SPACING_PX * self.scale)
@@ -443,32 +451,32 @@ class SceneView(Gtk.Fixed):
             if not candidates:
                 candidates = [(0.5, 0.5)]
             x, y = choose_random_position(
-                bounds,
+                random_bounds,
                 item_w,
                 item_h,
                 candidates,
                 occupied,
                 spacing=spacing,
             )
-            placements.append((rendered, x, y, item_w, item_h))
+            placements.append(
+                (rendered, x, y, item_w, item_h, random_bounds)
+            )
             occupied.append((x, y, item_w, item_h))
 
-        for rendered, x, y, item_w, item_h in placements:
+        for rendered, x, y, item_w, item_h, layer_bounds in placements:
             rect = (x, y, item_w, item_h)
-            if not rect_within_bounds(rect, bounds):
-                # This should be unreachable. Keep a loud diagnostic rather than
-                # silently allowing a regression to draw outside the safe screen.
+            if not rect_within_bounds(rect, layer_bounds):
                 LOG.error(
                     "Layout invariant failed for layer %s: rect=%r bounds=%r",
                     rendered.model.id,
                     rect,
-                    bounds,
+                    layer_bounds,
                 )
                 x, y = fixed_top_left(
                     rendered.model.position,
-                    min(item_w, bounds.width),
-                    min(item_h, bounds.height),
-                    bounds,
+                    min(item_w, layer_bounds.width),
+                    min(item_h, layer_bounds.height),
+                    layer_bounds,
                     scale=self.scale,
                 )
             self.move(rendered.widget, x, y)
