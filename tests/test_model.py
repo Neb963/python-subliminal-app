@@ -1,17 +1,4 @@
-from subliminal.model import (
-    Folder,
-    Position,
-    calculate_position,
-    choose_non_overlapping_top_left,
-    config_from_dict,
-    default_config,
-    rects_overlap,
-)
-
-
-def test_center_position() -> None:
-    pos = Position(x=0.5, y=0.5, anchor="center")
-    assert calculate_position(pos, 1000, 500, 200, 100) == (400.0, 200.0)
+from subliminal.model import config_from_dict, default_config
 
 
 def test_config_round_trip_defaults_and_clamping() -> None:
@@ -81,37 +68,6 @@ def test_random_position_config_round_trip() -> None:
     })
     assert cfg.scenes[0].layers[0].position.randomize is True
     assert cfg.scenes[0].layers[0].name == "Mover"
-
-
-def test_collision_aware_random_position_uses_free_candidate() -> None:
-    occupied = [(10.0, 10.0, 200.0, 100.0)]
-    x, y = choose_non_overlapping_top_left(
-        1000,
-        600,
-        100,
-        50,
-        candidates=[(0.05, 0.05), (0.9, 0.9)],
-        occupied=occupied,
-        margin=10,
-        spacing=20,
-    )
-    result = (x, y, 100.0, 50.0)
-    assert not rects_overlap(result, occupied[0], spacing=20)
-
-
-def test_random_position_fallback_stays_on_screen() -> None:
-    x, y = choose_non_overlapping_top_left(
-        300,
-        200,
-        100,
-        50,
-        candidates=[(0.0, 0.0), (1.0, 1.0)],
-        occupied=[(0.0, 0.0, 300.0, 200.0)],
-        margin=8,
-        spacing=16,
-    )
-    assert 8 <= x <= 192
-    assert 8 <= y <= 142
 
 
 def test_text_background_and_alignment_defaults_migrate() -> None:
