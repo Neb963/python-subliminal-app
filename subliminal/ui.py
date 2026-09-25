@@ -345,7 +345,8 @@ class EditorPage(Gtk.Box):
         folder_label.set_margin_start(12)
         header.append(folder_label)
 
-        self.scene_folder = Gtk.DropDown.new_from_strings(["Unfiled"])
+        self._folder_model = Gtk.StringList.new(["Unfiled"])
+        self.scene_folder = Gtk.DropDown(model=self._folder_model)
         self.scene_folder.connect("notify::selected", self._scene_folder_changed)
         self.scene_folder.set_hexpand(True)
         header.append(self.scene_folder)
@@ -838,7 +839,13 @@ class EditorPage(Gtk.Box):
         ]
         self._loading = True
         try:
-            self.scene_folder.set_model(Gtk.StringList.new(labels))
+            # Keep the model object stable. Replacing a GtkDropDown model can emit
+            # selection notifications while GTK is still processing the old one.
+            self._folder_model.splice(
+                0,
+                self._folder_model.get_n_items(),
+                labels,
+            )
         finally:
             self._loading = False
         self._refresh_scene_controls()
