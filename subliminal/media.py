@@ -128,18 +128,34 @@ class MediaCache:
             limit_w = max_width or max(1, width or 4096)
             limit_h = max_height or max(1, height or 4096)
 
-            # Explicit requested dimensions may reduce the rasterization target,
-            # but never enlarge it beyond the monitor/preview box. Missing
-            # dimensions use the full bounded box so extreme source aspect ratios
-            # are still constrained on both axes.
-            target_w = min(limit_w, max(1, width)) if width is not None else limit_w
-            target_h = min(limit_h, max(1, height)) if height is not None else limit_h
+            if width is not None and height is not None and not keep_aspect:
+                # Both dimensions are explicit, so non-aspect mode has precise
+                # semantics. Clamp both before allocation, then preserve the
+                # requested stretch.
+                target_w = min(limit_w, max(1, width))
+                target_h = min(limit_h, max(1, height))
+                preserve = False
+            else:
+                # With either dimension Auto there is no independent value for
+                # that axis. Use an aspect-preserving bounded box so an extreme
+                # source aspect ratio cannot derive an enormous implicit bitmap.
+                target_w = (
+                    min(limit_w, max(1, width))
+                    if width is not None
+                    else limit_w
+                )
+                target_h = (
+                    min(limit_h, max(1, height))
+                    if height is not None
+                    else limit_h
+                )
+                preserve = True
 
             pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                 str(path),
                 target_w,
                 target_h,
-                True,
+                preserve,
             )
         elif width is None and height is None:
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
