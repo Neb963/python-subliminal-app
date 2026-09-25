@@ -259,12 +259,14 @@ class SceneView(Gtk.Fixed):
         *,
         scale: float = 1.0,
         preview: bool = False,
+        render_limit: tuple[int, int] | None = None,
     ) -> None:
         super().__init__()
         self.scene = scene
         self.media = media
         self.scale = max(0.01, float(scale))
         self.preview = preview
+        self.render_limit = render_limit
         self._layers: list[RenderedLayer] = []
         self._animations: list[AnimatedPicture] = []
         self._layout_pending = False
@@ -333,7 +335,17 @@ class SceneView(Gtk.Fixed):
     def _make_image(self, layer: ImageLayer) -> Gtk.Widget:
         if not layer.path:
             raise FileNotFoundError("No image selected")
-        asset = self.media.load(layer, self.scale)
+        max_width = None
+        max_height = None
+        if self.render_limit is not None:
+            max_width = max(1, round(self.render_limit[0] * self.scale))
+            max_height = max(1, round(self.render_limit[1] * self.scale))
+        asset = self.media.load(
+            layer,
+            self.scale,
+            max_width=max_width,
+            max_height=max_height,
+        )
         picture = AnimatedPicture(asset)
         picture.set_opacity(max(0.0, min(1.0, layer.opacity)))
         if asset.animated:
