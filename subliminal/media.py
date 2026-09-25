@@ -31,21 +31,46 @@ class MediaCache:
     def clear(self) -> None:
         self._cache.clear()
 
-    def load(self, layer: ImageLayer, scale: float = 1.0) -> MediaAsset:
+    def load(
+        self,
+        layer: ImageLayer,
+        scale: float = 1.0,
+        *,
+        max_width: int | None = None,
+        max_height: int | None = None,
+    ) -> MediaAsset:
         path = Path(layer.path).expanduser()
         if not path.is_file():
             raise FileNotFoundError(str(path))
         stat = path.stat()
         width = None if layer.width_px is None else max(1, round(layer.width_px * scale))
         height = None if layer.height_px is None else max(1, round(layer.height_px * scale))
-        key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size, width, height, layer.keep_aspect_ratio)
+        max_width = None if max_width is None else max(1, int(max_width))
+        max_height = None if max_height is None else max(1, int(max_height))
+        key = (
+            str(path.resolve()),
+            stat.st_mtime_ns,
+            stat.st_size,
+            width,
+            height,
+            layer.keep_aspect_ratio,
+            max_width,
+            max_height,
+        )
         cached = self._cache.get(key)
         if cached is not None:
             return cached
         if path.suffix.lower() == ".svg":
             asset = self._load_svg(path, width, height, layer.keep_aspect_ratio)
         else:
-            asset = self._load_pillow(path, width, height, layer.keep_aspect_ratio)
+            asset = self._load_pillow(
+                path,
+                width,
+                height,
+                layer.keep_aspect_ratio,
+                max_width=max_width,
+                max_height=max_height,
+            )
         self._cache[key] = asset
         return asset
 
@@ -59,9 +84,26 @@ class MediaCache:
         texture = Gdk.Texture.new_for_pixbuf(pixbuf)
         return MediaAsset(texture.get_width(), texture.get_height(), [texture], [0])
 
-    def _load_pillow(self, path: Path, width: int | None, height: int | None, keep_aspect: bool) -> MediaAsset:
+    def _load_pillow(
+        self,
+        path: Path,
+        width: int | None,
+        height: int | None,
+        keep_aspect: bool,
+        *,
+        max_width: int | None = None,
+        max_height: int | None = None,
+    ) -> MediaAsset:
         with Image.open(path) as source:
-            target = self._target_size(source.width, source.height, width, height, keep_aspect)
+            target = self._target_size(
+                source.width,
+                source.height,
+                width,
+                height,
+                keep_aspect,
+                max_width=max_width,
+                max_height=max_height,
+            )
             animated = bool(getattr(source, "is_animated", False))
             frames: list[object] = []
             durations: list[int] = []
@@ -87,6 +129,9 @@ class MediaCache:
         width: int | None,
         height: int | None,
         keep_aspect: bool,
+        *,
+        max_width: int | None = None,
+        max_height: int | None = None,
     ) -> tuple[int, int]:
         if width is None and height is None:
             return src_w, src_h
@@ -95,8 +140,19 @@ class MediaCache:
         if height is None:
             height = max(1, round(src_h * (width / src_w)))
         if not keep_aspect:
-            return max(1, width), max(1, height)
+            target_w, target_h = max(1, width), max(1, height)
+            if max_width is not None:
+                target_w = min(target_w, max_width)
+            if max_height is not None:
+                target_h = min(target_h, max_height)
+            return target_w, target_h
+
         ratio = min(width / src_w, height / src_h)
+        if max_width is not None:
+            ratio = min(ratio, max_width / src_w)
+        if max_height is not None:
+            ratio = min(ratio, max_height / src_h)
+        ratio = min(1.0 if width == src_w and height == src_h else ratio, ratio)
         return max(1, round(src_w * ratio)), max(1, round(src_h * ratio))
 
     @staticmethod
