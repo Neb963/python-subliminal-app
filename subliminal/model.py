@@ -12,6 +12,7 @@ Anchor = Literal[
 ]
 SelectionMode = Literal["random", "sequential"]
 DisplayMode = Literal["all", "selected"]
+TextAlignment = Literal["left", "center", "right"]
 
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 ANCHORS: tuple[Anchor, ...] = (
@@ -57,6 +58,10 @@ class TextLayer:
     bold: bool = False
     italic: bool = False
     underline: bool = False
+    alignment: TextAlignment = "left"
+    background_enabled: bool = False
+    background_color: str = "#00000099"
+    background_padding_px: int = 8
     opacity: float = 0.65
 
 
@@ -189,6 +194,14 @@ def layer_from_dict(data: dict) -> Layer:
         bold=bool(data.get("bold", False)),
         italic=bool(data.get("italic", False)),
         underline=bool(data.get("underline", False)),
+        alignment=(
+            data.get("alignment", "left")
+            if data.get("alignment", "left") in {"left", "center", "right"}
+            else "left"
+        ),
+        background_enabled=bool(data.get("background_enabled", False)),
+        background_color=str(data.get("background_color", "#00000099")),
+        background_padding_px=int(data.get("background_padding_px", 8)),
         opacity=float(data.get("opacity", 0.65)),
     )
 
@@ -313,8 +326,16 @@ def normalize_config(config: AppConfig) -> None:
             if isinstance(layer, TextLayer):
                 layer.font_size_px = max(1, int(layer.font_size_px))
                 layer.font_family = layer.font_family.strip() or "Sans"
+                if layer.alignment not in {"left", "center", "right"}:
+                    layer.alignment = "left"
+                layer.background_padding_px = max(
+                    0,
+                    min(500, int(layer.background_padding_px)),
+                )
                 if not _valid_color(layer.color):
                     layer.color = "#FFFFFFFF"
+                if not _valid_color(layer.background_color):
+                    layer.background_color = "#00000099"
             else:
                 if layer.width_px is not None:
                     layer.width_px = max(1, int(layer.width_px))
