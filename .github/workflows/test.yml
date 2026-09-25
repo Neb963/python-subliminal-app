@@ -72,7 +72,16 @@ jobs:
               max_width=1920, max_height=1080,
           ) == (1920, 1080)
           PY
+      - name: Prepare headless GTK session
+        run: |
+          dbus-uuidgen --ensure=/etc/machine-id
+          test -s /etc/machine-id
+          test -e /usr/lib64/libGLESv2.so.2
       - name: Run GTK editor and allocation smoke checks
-        run: xvfb-run -a env PYTHONPATH=. python3 tools/gtk_smoke.py
+        run: |
+          dbus-run-session -- \
+            xvfb-run -a \
+            env PYTHONPATH=. GSK_RENDERER=cairo NO_AT_BRIDGE=1 \
+            python3 tools/gtk_smoke.py
       - name: Compile against Fedora system Python
         run: PYTHONPATH=. python3 -m compileall -q subliminal tools
