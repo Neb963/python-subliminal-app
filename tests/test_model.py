@@ -103,3 +103,17 @@ def test_invalid_text_visual_values_are_normalized() -> None:
     assert layer.alignment == "left"
     assert layer.background_color == "#00000099"
     assert layer.background_padding_px == 500
+
+
+def test_schema_4_migrates_to_schema_5() -> None:
+    cfg = config_from_dict({
+        "version": 4,
+        "scenes": [{
+            "name": "Old",
+            "layers": [{"kind": "text", "text": "legacy"}],
+        }],
+    })
+    assert cfg.version == 5
+    layer = cfg.scenes[0].layers[0]
+    assert layer.alignment == "left"
+    assert layer.background_enabled is False
