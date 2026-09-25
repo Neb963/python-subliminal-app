@@ -1,28 +1,56 @@
 # Subliminal
 
-A native Fedora KDE Plasma **Wayland** application that flashes configurable text and images in a true click-through compositor overlay.
+Subliminal is a native Python/GTK desktop application for Fedora KDE Plasma on **Wayland/KWin**. It flashes configurable text and images through a true click-through layer-shell overlay.
 
-The compositor-facing overlay remains Python + GTK4 + `gtk4-layer-shell`. The editor is a native GTK three-pane interface: **Library → Canvas → Layers/Properties**.
+The compositor-facing implementation remains deliberately small: GTK4 + PyGObject + `gtk4-layer-shell`. The editor is a native three-pane interface: **Library → Canvas → Layers / Properties**.
+
+## Current release
+
+**1.4.0**
+
+Version 1.4 is primarily a stability/layout release. It fixes editor freezes around folders and font selection, prevents temporary top-left preview piles, enforces screen-safe layer placement, and adds text backgrounds and independent text alignment.
 
 ## Features
 
-- Frame-synchronized flash duration using the actual GTK/compositor frame clock.
-- Adjustable wall-clock break between flashes.
-- Multiple scenes, selected randomly or sequentially.
-- Organizational folders for scenes; folders do not affect rendering or scheduling.
-- Editable names for every scene and every layer.
-- Multiple mixed text/image layers per scene.
-- Text: Unicode/emoji, installed font, pixel size, RGBA color, bold, italic, underline and opacity.
-- Images: PNG, JPEG, WebP, SVG and GIF.
-- SVG file selection works through explicit filename patterns as well as MIME detection.
-- Animated GIF and animated WebP playback.
-- Fixed positioning with anchor, normalized X/Y and pixel offsets.
-- Random position on every flash.
-- Randomized layers avoid fixed elements and other randomized layers when space permits; crowded layouts fall back to the least-overlapping candidate rather than dropping content.
+- Frame-synchronized flash duration using GTK's compositor-driven frame clock.
+- Configurable break between flashes.
+- Random or sequential scene selection.
+- Organizational folders for scenes.
+- Mandatory editable names for scenes and layers.
+- Mixed text and image layers in each scene.
+- Text:
+  - Unicode and emoji.
+  - Installed font family.
+  - Pixel font size.
+  - Bold, italic and underline.
+  - RGBA foreground color.
+  - Layer opacity.
+  - Left / center / right multiline alignment independent of layer anchor.
+  - Optional RGBA colored background with configurable padding.
+- Images:
+  - PNG.
+  - JPEG.
+  - WebP.
+  - SVG.
+  - GIF.
+  - Animated GIF and animated WebP.
+  - Layer opacity and source alpha where supported.
+- Fixed positioning:
+  - nine anchors;
+  - normalized X/Y;
+  - pixel offsets;
+  - exact edge semantics: 0% can touch the screen edge;
+  - final position is always clamped so the rendered layer cannot cross the screen boundary.
+- Random position every flash:
+  - new position for every repetition;
+  - inset screen margin;
+  - collision avoidance against fixed layers and previously placed random layers;
+  - least-overlap fallback when a collision-free layout is physically impossible.
+- Oversized text/images are reduced to an effective per-monitor render size rather than being clipped off-screen. The configured source values are preserved.
 - Multi-monitor support and monitor hot-plug handling.
 - True click-through overlay with no keyboard focus.
 - Import/export of the complete JSON configuration.
-- Auto-save, login autostart, diagnostics and rotating logs.
+- Atomic auto-save, login autostart, diagnostics and rotating logs.
 
 > JPEG has no per-pixel alpha channel. JPEG layers still support whole-layer opacity.
 
@@ -30,9 +58,11 @@ The compositor-facing overlay remains Python + GTK4 + `gtk4-layer-shell`. The ed
 
 Target: **Fedora KDE Plasma on Wayland / KWin**.
 
-The application deliberately does not fall back to a normal always-on-top window when layer-shell is unavailable.
+The application intentionally does not fall back to an ordinary always-on-top window when layer-shell is unavailable.
 
-## Install on Fedora
+## Install / update on Fedora
+
+Clone:
 
 ```bash
 git clone https://github.com/Neb963/python-subliminal-app.git
@@ -40,33 +70,28 @@ cd python-subliminal-app
 ./install.sh
 ```
 
-If the Fedora dependencies are already installed:
+If the native Fedora packages are already installed:
 
 ```bash
 ./install.sh --skip-packages
 ```
 
-Then run:
+Verify:
 
 ```bash
-subliminal
+~/.local/bin/subliminal --version
+~/.local/bin/subliminal --diagnose
 ```
 
-Verify the installed version:
+Then launch:
 
 ```bash
-subliminal --version
+~/.local/bin/subliminal
 ```
 
-Verify Wayland/layer-shell support:
-
-```bash
-subliminal --diagnose
-```
+If you use GitHub's downloaded ZIP instead of a Git clone, quit the currently running application completely, replace/extract the new source folder, and run `./install.sh --skip-packages` from the newly extracted folder.
 
 ## Editor
-
-The main editor is organized into three panes.
 
 ### Library
 
@@ -74,37 +99,111 @@ The left pane contains folders and scenes.
 
 - **+ Folder** creates an organizational folder.
 - **+ Scene** creates a scene in the selected/current folder.
-- Select a folder or scene and edit **Selected name** to rename it.
-- Duplicate duplicates the selected scene.
-- Deleting a folder moves its scenes to **Unfiled**; it never silently deletes those scenes.
-- A scene can be moved between folders using the Folder selector above the canvas.
+- **Selected name** renames the selected folder or scene.
+- **Duplicate** duplicates a scene.
+- Deleting a folder moves its scenes to **Unfiled** rather than deleting those scenes.
+- The Folder selector above the canvas moves the current scene to another folder.
 
-Folders are editor metadata only. Scheduling still operates on the same flat scene list.
+Folders are metadata only. The render model remains `Scene → Layers`.
+
+Folder selection/movement is deliberately isolated from renderer rebuilding. The folder dropdown uses one persistent GTK model and list relocation is deferred until the dropdown's own selection callback has completed.
 
 ### Canvas
 
 The center pane previews the selected scene.
 
-**Reroll preview** generates another randomized layout without affecting saved fixed positions.
+The preview is now hidden until its first complete layout is calculated. Property edits are debounced, so intermediate children at `(0, 0)` are never intentionally exposed.
+
+**Reroll preview** chooses another randomized placement without modifying saved fixed coordinates.
 
 ### Layers / Properties
 
-The right pane contains the selected scene's layer list and properties.
+Every text/image layer has an independent editable **Name**.
 
-Every text and image layer has an editable **Name** field. Layer names are independent from text content and image filenames, so renaming content does not overwrite your organizational names.
+Position can be either:
 
-For position you can use either:
-
-- fixed Anchor + X/Y + pixel offsets, or
+- fixed Anchor + X/Y + offsets; or
 - **Random → New position on every flash**.
 
-Random placement uses multiple candidate positions and avoids other visible layer bounding boxes with spacing when possible.
+Visual property edits invalidate only the currently edited scene's renderer rather than rebuilding every scene on every monitor.
+
+## Text background
+
+Enable:
+
+```text
+Background
+☑ Colored background
+```
+
+Then configure:
+
+- background RGBA color;
+- background alpha through that color;
+- padding in pixels.
+
+The complete padded background box is treated as the layer's geometry. Therefore it participates in screen-boundary enforcement and random collision avoidance.
+
+Layer opacity is applied to the complete text layer, including its background.
+
+## Text alignment
+
+Alignment choices:
+
+```text
+Left
+Center
+Right
+```
+
+Alignment affects line arrangement *inside* the text box. It is intentionally independent from:
+
+- anchor;
+- X/Y position;
+- offsets;
+- random placement.
+
+For example, a layer may be anchored at the bottom-right of the screen while its multiline text is center-aligned.
+
+## Screen-safe layout
+
+The renderer follows one invariant:
+
+> Every visible layer's final outer rectangle must fit inside its usable monitor/canvas rectangle.
+
+The sequence is:
+
+```text
+determine actual canvas/monitor allocation
+        ↓
+derive effective content size
+        ↓
+fit oversized content
+        ↓
+calculate anchor/random position
+        ↓
+clamp to valid bounds
+        ↓
+validate rectangle
+        ↓
+reveal
+```
+
+For the real overlay, the native window maps at opacity 0. Layout is recalculated against the actual mapped GTK allocation, and only then is the overlay revealed and frame counting started. This avoids an incorrect first visible frame under display scaling.
+
+During breaks the layer-shell surface is fully unmapped. That is intentional: it prevents KWin from retaining the previous committed overlay buffer.
+
+### Large media
+
+Raster media is decoded no larger than the target monitor/preview limit. This applies to PNG/JPEG/WebP/GIF, including Auto sizing.
+
+SVG rasterization is likewise bounded before allocating its GdkPixbuf.
+
+The media cache is LRU-bounded by both entry count and approximate decoded memory to prevent repeated image-size editing from growing memory indefinitely.
 
 ## Timing
 
-Flash duration is intentionally frame-based.
-
-Examples:
+Flash duration is frame-based rather than pretending the compositor can provide arbitrary sub-frame millisecond timing.
 
 | Refresh | 1 frame | 2 frames | 3 frames |
 | --- | ---: | ---: | ---: |
@@ -116,29 +215,29 @@ The **break after flash** remains ordinary wall-clock seconds.
 
 ## Import / export
 
-Use the **Import** and **Export** buttons in the top bar.
+**Import** and **Export** in the top bar operate on the complete JSON configuration:
 
-Export writes the complete application configuration as JSON, including:
-
-- folders and scene membership;
+- folders;
+- scene membership;
 - scene/layer names;
 - text/image properties;
+- background/alignment;
 - fixed/random positioning;
 - timing;
 - display selection;
-- autostart/startup preferences.
+- startup preferences.
 
-Image files themselves are **not copied into the export**. Image layers retain their filesystem paths. This keeps export simple and explicit; a portable asset bundle can be added separately later if needed.
+Image files themselves are not embedded. Image layers retain filesystem paths.
+
+Schema 4/v1.3 configurations are automatically migrated to schema 5; text backgrounds default off and alignment defaults to left.
 
 ## Configuration and logs
 
-Main configuration:
+Configuration:
 
 ```text
 ~/.config/subliminal/config.json
 ```
-
-The configuration is written atomically. Older configuration versions are migrated automatically.
 
 Logs:
 
@@ -152,32 +251,38 @@ Debug overlay lifecycle:
 subliminal --debug
 ```
 
-## Run directly from a checkout
+## Development / verification
 
-```bash
-sudo dnf install python3 python3-gobject gtk4 gtk4-layer-shell python3-cairo python3-pillow gdk-pixbuf2 librsvg2
-./run.sh
-```
-
-## Tests
+Core tests:
 
 ```bash
 python3 -m pytest
 ```
 
-CI covers model migration, configuration persistence/import/export, scheduler behavior, collision-aware random placement, Python compilation and shell syntax. KWin compositor behavior still requires an actual Plasma Wayland session.
+CI performs two independent jobs.
 
-## Uninstall
+The core job covers:
 
-```bash
-./uninstall.sh
-```
+- config migrations;
+- import/export;
+- scheduler lifecycle;
+- thousands of randomized layout/bounds combinations;
+- oversized/tiny geometry;
+- Python compilation;
+- shell syntax.
 
-To remove configuration and logs too:
+The Fedora runtime job installs the native GTK stack and runs a live GTK session under Xvfb. Its smoke test exercises:
 
-```bash
-./uninstall.sh --purge
-```
+- repeated folder switching;
+- repeated font-family changes through the actual `Gtk.FontDialogButton` signal path;
+- debounced editor callbacks;
+- huge fonts and background padding;
+- huge positive/negative offsets;
+- oversized images;
+- randomized layout rerolls;
+- actual `Gtk.Fixed` child allocations staying within the canvas.
+
+KWin-specific layer-shell composition itself still requires a real Plasma Wayland session and cannot be validated by Xvfb.
 
 ## Architecture
 
@@ -187,17 +292,17 @@ Gtk.Application
        ├─ ConfigStore
        ├─ Scheduler
        ├─ GTK editor
-       │   ├─ Library (folders + scenes)
+       │   ├─ Library
        │   ├─ Canvas
        │   └─ Layers / Properties
        └─ OverlayManager
-          └─ OverlayWindow per target monitor
+          └─ OverlayWindow per monitor
              └─ SceneView
-                ├─ TextLayer
-                └─ ImageLayer
+                ├─ TextLayerWidget
+                └─ AnimatedPicture
 ```
 
-Folders are not part of the render tree. The render model remains intentionally simple:
+Folders never enter the render tree:
 
 ```text
 Scene
@@ -206,8 +311,20 @@ Scene
 └── ...
 ```
 
-Overlay surfaces are mapped for the flash and unmapped during the break. This avoids KWin retaining the last committed visual buffer while preserving true layer-shell behavior.
+## Uninstall
 
-## Development scope
+Preserve configuration:
 
-The project currently targets KDE Plasma/Wayland first. It does not attempt GNOME/Mutter, X11, Windows, macOS, video/audio layers, cloud sync or a web frontend.
+```bash
+./uninstall.sh
+```
+
+Remove app, config and logs:
+
+```bash
+./uninstall.sh --purge
+```
+
+## Scope
+
+The project currently targets KDE Plasma/Wayland first. It does not attempt GNOME/Mutter, X11 production overlays, Windows, macOS, video/audio layers, cloud sync or a web frontend.
