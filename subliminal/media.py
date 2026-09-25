@@ -116,46 +116,40 @@ class MediaCache:
         max_width: int | None = None,
         max_height: int | None = None,
     ) -> MediaAsset:
-        # GdkPixbuf rasterizes SVG during load. Apply monitor limits here, before
-        # allocation, rather than creating a huge bitmap and shrinking it later.
-        requested_w = width
-        requested_h = height
+        """Rasterize SVG without ever allocating beyond the render limit.
 
-        if requested_w is None and requested_h is None:
-            if max_width is None and max_height is None:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
-            else:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                    str(path),
-                    max_width or -1,
-                    max_height or -1,
-                    True,
-                )
-        else:
-            target_w = requested_w or -1
-            target_h = requested_h or -1
-            if max_width is not None and target_w > 0:
-                target_w = min(target_w, max_width)
-            if max_height is not None and target_h > 0:
-                target_h = min(target_h, max_height)
+        GdkPixbuf's one-dimension (-1) scaling can derive a very large implicit
+        dimension for extreme SVG aspect ratios. When a render limit is known,
+        always rasterize into a bounded aspect-preserving box first. Gtk.Picture
+        may subsequently stretch that bounded texture if the layer explicitly
+        disables aspect-ratio preservation.
+        """
+        if max_width is not None or max_height is not None:
+            limit_w = max_width or max(1, width or 4096)
+            limit_h = max_height or max(1, height or 4096)
 
-            # If only one dimension is explicit, bound the implicit dimension as
-            # well by loading into the monitor box with aspect preservation.
-            if keep_aspect and max_width is not None and max_height is not None:
-                if requested_w is None or requested_h is None:
-                    target_w = min(
-                        requested_w or max_width,
-                        max_width,
-                    )
-                    target_h = min(
-                        requested_h or max_height,
-                        max_height,
-                    )
+            # Explicit requested dimensions may reduce the rasterization target,
+            # but never enlarge it beyond the monitor/preview box. Missing
+            # dimensions use the full bounded box so extreme source aspect ratios
+            # are still constrained on both axes.
+            target_w = min(limit_w, max(1, width)) if width is not None else limit_w
+            target_h = min(limit_h, max(1, height)) if height is not None else limit_h
 
             pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                 str(path),
                 target_w,
                 target_h,
+                True,
+            )
+        elif width is None and height is None:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
+        else:
+            # No monitor limit is known (principally direct/library use). Preserve
+            # the user's legacy sizing semantics here.
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                str(path),
+                width or -1,
+                height or -1,
                 keep_aspect,
             )
 
