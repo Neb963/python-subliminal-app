@@ -108,7 +108,14 @@ class OverlayWindow:
 
         self._views = {}
         for scene in scenes:
-            view = SceneView(scene, self.media)
+            view = SceneView(
+                scene,
+                self.media,
+                render_limit=(
+                    self.monitor_info.width,
+                    self.monitor_info.height,
+                ),
+            )
             self._views[scene.id] = view
             stack.add_named(view, scene.id)
 
