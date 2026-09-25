@@ -189,6 +189,32 @@ def smoke_layout_allocations() -> None:
         assert text_widget.label.get_justify() == Gtk.Justification.RIGHT
         assert text_widget.label.get_margin_start() > 0
 
+        # Extreme SVG aspect ratio + one explicit dimension + non-aspect mode
+        # must still rasterize inside the monitor limit before Gtk.Picture sees it.
+        svg_path = Path(temp) / "extreme.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="100" height="10000" viewBox="0 0 100 10000">'
+            '<rect width="100" height="10000" fill="red"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+        svg_layer = ImageLayer(
+            name="Extreme SVG",
+            path=str(svg_path),
+            width_px=5000,
+            height_px=None,
+            keep_aspect_ratio=False,
+        )
+        svg_asset = MediaCache().load(
+            svg_layer,
+            1.0,
+            max_width=800,
+            max_height=600,
+        )
+        assert svg_asset.width <= 800
+        assert svg_asset.height <= 600
+
         window.destroy()
         drain()
 
