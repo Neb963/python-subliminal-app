@@ -168,8 +168,8 @@ class AppController:
         self.store.save(self.config)
         self.set_autostart(self.config.autostart)
         if self.overlay.windows:
+            # sync_monitors() also rebuilds scene views for the imported config.
             self.overlay.sync_monitors()
-            self.overlay.rebuild_scenes()
         if self.window is not None:
             self.window.refresh_all()
             self.window.show_warning(None)
