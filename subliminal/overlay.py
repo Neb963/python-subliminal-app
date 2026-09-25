@@ -126,6 +126,30 @@ class OverlayWindow:
         self.window.set_opacity(0.0)
         self.window.set_visible(False)
 
+    def sync_scene(self, scene: Scene | None, scene_id: str) -> None:
+        self.cancel_flash()
+        old = self._views.pop(scene_id, None)
+        if old is not None:
+            old.stop_animations()
+            self.stack.remove(old)
+
+        if scene is None:
+            if self.stack.get_visible_child_name() == scene_id:
+                self.stack.set_visible_child_name("__blank__")
+            return
+
+        view = SceneView(
+            scene,
+            self.media,
+            render_limit=(
+                self.monitor_info.width,
+                self.monitor_info.height,
+            ),
+        )
+        self._views[scene.id] = view
+        self.stack.add_named(view, scene.id)
+        self.stack.set_visible_child_name("__blank__")
+
     def flash_scene(self, scene_id: str, frames: int, done: Callable[[], None]) -> None:
         self.cancel_flash()
 
@@ -376,6 +400,18 @@ class OverlayManager:
         scenes = self.get_config().scenes
         for window in self.windows.values():
             window.rebuild(scenes)
+
+    def sync_scene(self, scene_id: str) -> None:
+        self._abort_presentation(notify=True)
+        scene = next(
+            (
+                item for item in self.get_config().scenes
+                if item.id == scene_id
+            ),
+            None,
+        )
+        for window in self.windows.values():
+            window.sync_scene(scene, scene_id)
 
     def flash_scene(self, scene: Scene, frames: int, done: Callable[[], None]) -> None:
         self.cancel_flash()
