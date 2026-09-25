@@ -46,7 +46,8 @@ class AppController:
         self.window: MainWindow | None = None
         self._save_timer: int | None = None
         self._overlay_rebuild_timer: int | None = None
-        self._overlay_dirty = False
+        self._overlay_full_dirty = False
+        self._overlay_dirty_scenes: set[str] = set()
         self.scheduler = Scheduler(
             lambda: self.config,
             self.overlay.flash_scene,
@@ -86,26 +87,28 @@ class AppController:
         self.overlay.start()
         self.scheduler.test_flash(scene)
 
-    def config_changed(self, kind: str = "visual") -> None:
-        """Persist changes without turning ordinary editor signals into app restarts.
-
-        Kinds:
-          metadata  - names/folders only; renderer is unaffected
-          visual    - text/font/color/position/image property changed
-          structural- scene/layer membership/order changed
-          display   - monitor targeting changed
-          timing    - scheduler timing changed
-          settings  - startup/autostart preferences changed
-        """
+    def config_changed(
+        self,
+        kind: str = "visual",
+        scene_id: str | None = None,
+    ) -> None:
+        """Persist edits and invalidate only the renderer scope that changed."""
         normalize_config(self.config)
         self._schedule_save()
 
         if kind in {"visual", "structural", "content"}:
+            if scene_id:
+                if not self._overlay_full_dirty:
+                    self._overlay_dirty_scenes.add(scene_id)
+            else:
+                self._overlay_full_dirty = True
+                self._overlay_dirty_scenes.clear()
             self._schedule_overlay_rebuild()
         elif kind == "display":
             was_running = self.scheduler.running
             if was_running:
                 self.scheduler.pause()
+            self._clear_overlay_dirty()
             self.overlay.sync_monitors()
             if was_running:
                 self.scheduler.start(immediate=False)
@@ -115,7 +118,6 @@ class AppController:
     def _schedule_overlay_rebuild(self) -> None:
         if not self.overlay.windows:
             return
-        self._overlay_dirty = True
         if self._overlay_rebuild_timer is None:
             self._overlay_rebuild_timer = GLib.timeout_add(
                 100,
@@ -123,20 +125,34 @@ class AppController:
             )
 
     def _try_overlay_rebuild(self) -> bool:
-        if not self._overlay_dirty:
+        if not self._overlay_full_dirty and not self._overlay_dirty_scenes:
             self._overlay_rebuild_timer = None
             return GLib.SOURCE_REMOVE
-        # Never replace SceneView widgets while a flash is using their frame clock.
-        # Waiting/stopped/paused are safe and require no scheduler restart.
         if self.scheduler.state == SchedulerState.VISIBLE:
             return GLib.SOURCE_CONTINUE
+
+        full_dirty = self._overlay_full_dirty
+        dirty_scenes = set(self._overlay_dirty_scenes)
         try:
-            self.overlay.rebuild_scenes()
-            self._overlay_dirty = False
+            if full_dirty:
+                self.overlay.rebuild_scenes()
+            else:
+                for scene_id in dirty_scenes:
+                    self.overlay.sync_scene(scene_id)
         except Exception:
-            LOG.exception("Failed to rebuild overlay scenes")
-        self._overlay_rebuild_timer = None
+            LOG.exception("Targeted overlay rebuild failed; trying full rebuild")
+            try:
+                self.overlay.rebuild_scenes()
+            except Exception:
+                LOG.exception("Full overlay rebuild also failed")
+        finally:
+            self._clear_overlay_dirty()
+            self._overlay_rebuild_timer = None
         return GLib.SOURCE_REMOVE
+
+    def _clear_overlay_dirty(self) -> None:
+        self._overlay_full_dirty = False
+        self._overlay_dirty_scenes.clear()
 
     def export_to(self, path: Path) -> None:
         export_config(self.config, path)
@@ -147,6 +163,7 @@ class AppController:
         if was_running:
             self.scheduler.pause()
         self.overlay.cancel_flash()
+        self._clear_overlay_dirty()
         self.config = imported
         self.store.save(self.config)
         self.set_autostart(self.config.autostart)
@@ -221,7 +238,7 @@ class AppController:
             self.window.set_runtime_state(state.value)
         if (
             state != SchedulerState.VISIBLE
-            and self._overlay_dirty
+            and (self._overlay_full_dirty or self._overlay_dirty_scenes)
             and self._overlay_rebuild_timer is None
         ):
             self._overlay_rebuild_timer = GLib.idle_add(self._try_overlay_rebuild)
