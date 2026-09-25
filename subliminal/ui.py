@@ -475,6 +475,52 @@ class EditorPage(Gtk.Box):
         self.color.connect("color-set", self._update_text)
         row = self._attach(grid, row, "Color", self.color)
 
+        self.text_alignment = Gtk.DropDown.new_from_strings(
+            ["Left", "Center", "Right"]
+        )
+        self.text_alignment.connect("notify::selected", self._update_text)
+        row = self._attach(grid, row, "Alignment", self.text_alignment)
+
+        self.text_background_enabled = Gtk.CheckButton(
+            label="Colored background"
+        )
+        self.text_background_enabled.connect(
+            "toggled",
+            self._on_text_background_toggled,
+        )
+        row = self._attach(
+            grid,
+            row,
+            "Background",
+            self.text_background_enabled,
+        )
+
+        self.text_background_color = Gtk.ColorButton()
+        self.text_background_color.set_use_alpha(True)
+        self.text_background_color.connect("color-set", self._update_text)
+        row = self._attach(
+            grid,
+            row,
+            "Background color",
+            self.text_background_color,
+        )
+
+        self.text_background_padding = Gtk.SpinButton.new_with_range(
+            0,
+            500,
+            1,
+        )
+        self.text_background_padding.connect(
+            "value-changed",
+            self._update_text,
+        )
+        row = self._attach(
+            grid,
+            row,
+            "Background padding",
+            self.text_background_padding,
+        )
+
         self.text_opacity = self._opacity_scale(self._update_text)
         row = self._attach(grid, row, "Opacity", self.text_opacity)
         self.text_pos, row = self._position_controls(grid, row, self._update_text)
@@ -962,6 +1008,24 @@ class EditorPage(Gtk.Box):
                 rgba = Gdk.RGBA()
                 rgba.parse(layer.color)
                 self.color.set_rgba(rgba)
+                alignment_index = {
+                    "left": 0,
+                    "center": 1,
+                    "right": 2,
+                }.get(layer.alignment, 0)
+                self.text_alignment.set_selected(alignment_index)
+                self.text_background_enabled.set_active(
+                    layer.background_enabled
+                )
+                background_rgba = Gdk.RGBA()
+                background_rgba.parse(layer.background_color)
+                self.text_background_color.set_rgba(background_rgba)
+                self.text_background_padding.set_value(
+                    layer.background_padding_px
+                )
+                self._set_text_background_sensitive(
+                    layer.background_enabled
+                )
                 self.text_opacity.set_value(layer.opacity * 100)
                 self._load_position(self.text_pos, layer.position)
             elif isinstance(layer, ImageLayer):
@@ -1047,6 +1111,9 @@ class EditorPage(Gtk.Box):
         layer.bold = self.bold.get_active()
         layer.italic = self.italic.get_active()
         layer.underline = self.underline.get_active()
+        layer.alignment = ("left", "center", "right")[
+            min(2, self.text_alignment.get_selected())
+        ]
         rgba = self.color.get_rgba()
         layer.color = "#{:02X}{:02X}{:02X}{:02X}".format(
             round(rgba.red * 255),
@@ -1054,9 +1121,32 @@ class EditorPage(Gtk.Box):
             round(rgba.blue * 255),
             round(rgba.alpha * 255),
         )
+        layer.background_enabled = (
+            self.text_background_enabled.get_active()
+        )
+        background_rgba = self.text_background_color.get_rgba()
+        layer.background_color = "#{:02X}{:02X}{:02X}{:02X}".format(
+            round(background_rgba.red * 255),
+            round(background_rgba.green * 255),
+            round(background_rgba.blue * 255),
+            round(background_rgba.alpha * 255),
+        )
+        layer.background_padding_px = (
+            self.text_background_padding.get_value_as_int()
+        )
         layer.opacity = self.text_opacity.get_value() / 100.0
         self._read_position(self.text_pos, layer.position)
         self._changed_layer()
+
+    def _on_text_background_toggled(self, button) -> None:
+        if self._loading:
+            return
+        self._set_text_background_sensitive(button.get_active())
+        self._update_text()
+
+    def _set_text_background_sensitive(self, enabled: bool) -> None:
+        self.text_background_color.set_sensitive(enabled)
+        self.text_background_padding.set_sensitive(enabled)
 
     def _update_image(self, *_args) -> None:
         if self._loading:
