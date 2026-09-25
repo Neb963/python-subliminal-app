@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Fedora runtime
         run: |
-          dnf install -y             python3             python3-gobject             gtk4             gtk4-layer-shell             python3-cairo             python3-pillow             gdk-pixbuf2             librsvg2
+          dnf install -y             python3             python3-gobject             gtk4             gtk4-layer-shell             python3-cairo             python3-pillow             gdk-pixbuf2             librsvg2             xorg-x11-server-Xvfb             xorg-x11-xauth
       - name: Verify GI APIs used by the application
         run: |
           python3 - <<'PY'
@@ -47,8 +47,16 @@ jobs:
           assert hasattr(Gtk.FontDialogButton, "new")
           assert hasattr(Gtk.FontDialogButton, "get_font_desc")
           assert hasattr(Gtk.FontDialogButton, "set_font_desc")
+          assert hasattr(Gtk.FontLevel, "FAMILY")
           assert hasattr(Pango, "attr_foreground_alpha_new")
           assert Gtk4LayerShell is not None
+
+          model = Gtk.StringList.new(["Unfiled", "A"])
+          model.splice(1, 1, ["B"])
+          assert model.get_string(1) == "B"
+
+          provider = Gtk.CssProvider()
+          provider.load_from_data(b"box { background-color: rgba(0,0,0,0.5); }")
           PY
       - name: Verify media sizing edge cases
         run: |
@@ -64,5 +72,7 @@ jobs:
               max_width=1920, max_height=1080,
           ) == (1920, 1080)
           PY
+      - name: Run GTK editor and allocation smoke checks
+        run: xvfb-run -a env PYTHONPATH=. python3 tools/gtk_smoke.py
       - name: Compile against Fedora system Python
-        run: PYTHONPATH=. python3 -m compileall -q subliminal
+        run: PYTHONPATH=. python3 -m compileall -q subliminal tools
