@@ -660,6 +660,17 @@ class EditorPage(Gtk.Box):
             controls[key].set_sensitive(sensitive)
 
     def refresh(self) -> None:
+        for attr in (
+            "_library_refresh_id",
+            "_folder_model_refresh_id",
+        ):
+            source_id = getattr(self, attr)
+            if source_id is not None:
+                GLib.source_remove(source_id)
+                setattr(self, attr, None)
+        if self._preview_refresh_id is not None:
+            GLib.source_remove(self._preview_refresh_id)
+            self._preview_refresh_id = None
         old_scene = self._scene_id
         old_folder = self._folder_id
 
@@ -945,8 +956,30 @@ class EditorPage(Gtk.Box):
                 "folder_id",
                 selected_folder,
             )
-        if target is not None:
-            self.library_list.select_row(target)
+
+        if target is None:
+            # A deferred refresh may outlive a delete/import. Never keep stale
+            # model IDs in the editor; fall back to the first real scene.
+            target = next(
+                (
+                    row
+                    for row in self._rows(self.library_list)
+                    if getattr(row, "row_kind", None) == "scene"
+                ),
+                None,
+            )
+            if target is None:
+                self._scene_id = None
+                self._folder_id = None
+                self._layer_id = None
+                self._refresh_library_name()
+                self._refresh_layers()
+                self._refresh_scene_controls()
+                self._refresh_properties()
+                self._request_preview_refresh(0)
+                return
+
+        self.library_list.select_row(target)
 
     def _schedule_folder_model_refresh(self) -> None:
         if self._folder_model_refresh_id is not None:
