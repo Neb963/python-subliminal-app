@@ -226,7 +226,7 @@ class EditorPage(Gtk.Box):
         self._scene_id: str | None = None
         self._folder_id: str | None = None
         self._layer_id: str | None = None
-        self._loading = False
+        self._sync_depth = 0
         self._preview_view: SceneView | None = None
         self._folder_choices: list[str | None] = []
         self._library_refresh_id: int | None = None
@@ -254,6 +254,17 @@ class EditorPage(Gtk.Box):
         right_paned.set_resize_start_child(True)
         right_paned.set_resize_end_child(False)
         right_paned.set_shrink_end_child(False)
+
+    @property
+    def _loading(self) -> bool:
+        return self._sync_depth > 0
+
+    @_loading.setter
+    def _loading(self, value: bool) -> None:
+        if value:
+            self._sync_depth += 1
+        else:
+            self._sync_depth = max(0, self._sync_depth - 1)
 
     def _build_library(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
