@@ -98,22 +98,25 @@ def fixed_top_left(
     *,
     scale: float = 1.0,
 ) -> tuple[float, float]:
-    item_w = min(max(1.0, item_width), bounds.width)
-    item_h = min(max(1.0, item_height), bounds.height)
+    item_w = min(max(1.0, _finite(item_width, 1.0)), bounds.width)
+    item_h = min(max(1.0, _finite(item_height, 1.0)), bounds.height)
+    safe_scale = _finite(scale, 1.0)
 
     anchor_x, anchor_y = _anchor_fraction(position.anchor)
-    target_x = bounds.x + bounds.width * min(1.0, max(0.0, position.x))
-    target_y = bounds.y + bounds.height * min(1.0, max(0.0, position.y))
+    pos_x = min(1.0, max(0.0, _finite(position.x, 0.5)))
+    pos_y = min(1.0, max(0.0, _finite(position.y, 0.5)))
+    target_x = bounds.x + bounds.width * pos_x
+    target_y = bounds.y + bounds.height * pos_y
 
     requested_x = (
         target_x
         - item_w * anchor_x
-        + _finite(position.offset_x, 0.0) * scale
+        + _finite(position.offset_x, 0.0) * safe_scale
     )
     requested_y = (
         target_y
         - item_h * anchor_y
-        + _finite(position.offset_y, 0.0) * scale
+        + _finite(position.offset_y, 0.0) * safe_scale
     )
     return clamp_top_left(
         requested_x,
@@ -131,8 +134,8 @@ def random_top_left(
     random_x: float,
     random_y: float,
 ) -> tuple[float, float]:
-    item_w = min(max(1.0, item_width), bounds.width)
-    item_h = min(max(1.0, item_height), bounds.height)
+    item_w = min(max(1.0, _finite(item_width, 1.0)), bounds.width)
+    item_h = min(max(1.0, _finite(item_height, 1.0)), bounds.height)
     span_x = max(0.0, bounds.width - item_w)
     span_y = max(0.0, bounds.height - item_h)
     rx = min(1.0, max(0.0, _finite(random_x, 0.5)))
@@ -162,8 +165,8 @@ def choose_random_position(
     spacing: float = 16.0,
 ) -> tuple[float, float]:
     """First collision-free candidate; least-overlap fallback if impossible."""
-    item_w = min(max(1.0, item_width), bounds.width)
-    item_h = min(max(1.0, item_height), bounds.height)
+    item_w = min(max(1.0, _finite(item_width, 1.0)), bounds.width)
+    item_h = min(max(1.0, _finite(item_height, 1.0)), bounds.height)
     samples = candidates or [(0.5, 0.5)]
     evaluated: list[tuple[float, float, float]] = []
 

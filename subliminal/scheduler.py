@@ -39,6 +39,8 @@ class Scheduler:
         self._sequence_index = 0
         self._last_scene_id: str | None = None
         self._presentation_generation = 0
+        self._test_flash_active = False
+        self._pre_test_state = SchedulerState.STOPPED
 
     @property
     def state(self) -> SchedulerState:
@@ -46,9 +48,17 @@ class Scheduler:
 
     @property
     def running(self) -> bool:
-        return self._state in {SchedulerState.WAITING, SchedulerState.VISIBLE}
+        return (
+            not self._test_flash_active
+            and self._state in {SchedulerState.WAITING, SchedulerState.VISIBLE}
+        )
+
+    @property
+    def testing(self) -> bool:
+        return self._test_flash_active
 
     def start(self, immediate: bool = False) -> None:
+        self._test_flash_active = False
         self._cancel_timer()
         self._cancel_active_presentation()
         self._set_state(SchedulerState.WAITING)
@@ -58,6 +68,12 @@ class Scheduler:
             self._schedule_break()
 
     def pause(self) -> None:
+        if self._test_flash_active:
+            self._test_flash_active = False
+            self._cancel_timer()
+            self._cancel_active_presentation()
+            self._set_state(self._pre_test_state)
+            return
         if self._state in {SchedulerState.STOPPED, SchedulerState.PAUSED}:
             return
         self._cancel_timer()
@@ -65,6 +81,7 @@ class Scheduler:
         self._set_state(SchedulerState.PAUSED)
 
     def stop(self) -> None:
+        self._test_flash_active = False
         self._cancel_timer()
         self._cancel_active_presentation()
         self._sequence_index = 0
@@ -76,13 +93,15 @@ class Scheduler:
             self.start(immediate=False)
 
     def test_flash(self, scene: Scene | None = None) -> None:
-        if self.running:
+        if self.running or self._test_flash_active:
             return
         self._cancel_timer()
         self._cancel_active_presentation()
         chosen = scene or self._choose_scene()
         if chosen is None:
             return
+        self._pre_test_state = self._state
+        self._test_flash_active = True
         self._set_state(SchedulerState.VISIBLE)
         generation = self._presentation_generation
         frames = max(1, self._get_config().schedule.visible_frames)
@@ -95,8 +114,9 @@ class Scheduler:
     def _finish_test_flash(self, generation: int) -> None:
         if generation != self._presentation_generation:
             return
-        if self._state == SchedulerState.VISIBLE:
-            self._set_state(SchedulerState.PAUSED)
+        if self._test_flash_active and self._state == SchedulerState.VISIBLE:
+            self._test_flash_active = False
+            self._set_state(self._pre_test_state)
 
     def _schedule_break(self) -> None:
         if self._state != SchedulerState.WAITING:
@@ -129,7 +149,7 @@ class Scheduler:
     def _on_flash_finished(self, generation: int) -> None:
         if generation != self._presentation_generation:
             return
-        if self._state != SchedulerState.VISIBLE:
+        if self._state != SchedulerState.VISIBLE or self._test_flash_active:
             return
         self._set_state(SchedulerState.WAITING)
         self._schedule_break()

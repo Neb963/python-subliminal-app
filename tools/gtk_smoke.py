@@ -238,6 +238,51 @@ def smoke_layout_allocations() -> None:
         )
         assert (stretched_asset.width, stretched_asset.height) == (500, 100)
 
+        # Auto-sized small SVG must preserve its intrinsic size instead of
+        # upscaling to fill the entire monitor limit.
+        small_svg = Path(temp) / "small.svg"
+        small_svg.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="64" height="48" viewBox="0 0 64 48">'
+            '<rect width="64" height="48" fill="green"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+        auto_svg = ImageLayer(
+            name="Small Auto SVG",
+            path=str(small_svg),
+            width_px=None,
+            height_px=None,
+            keep_aspect_ratio=True,
+        )
+        auto_asset = MediaCache().load(
+            auto_svg,
+            1.0,
+            max_width=800,
+            max_height=600,
+        )
+        assert (auto_asset.width, auto_asset.height) == (64, 48), (
+            auto_asset.width,
+            auto_asset.height,
+        )
+
+        # Zero-alpha text color must not crash or pass invalid Pango alpha 0.
+        zero_alpha_scene = Scene(
+            name="Zero alpha",
+            layers=[
+                TextLayer(
+                    name="Invisible",
+                    text="transparent",
+                    color="#FFFFFF00",
+                    background_enabled=True,
+                    background_padding_px=500,
+                )
+            ],
+        )
+        zero_view = SceneView(zero_alpha_scene, MediaCache(), render_limit=(400, 300))
+        zero_view.prepare_flash(400, 300)
+        assert zero_view._layers[0].widget.label.get_opacity() == 0.0
+
         window.destroy()
         drain()
 

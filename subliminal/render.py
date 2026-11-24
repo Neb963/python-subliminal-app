@@ -24,16 +24,31 @@ SAFE_MARGIN_PX = 12.0
 
 
 class AnimatedPicture(Gtk.Picture):
-    def __init__(self, asset: MediaAsset) -> None:
+    def __init__(
+        self,
+        asset: MediaAsset,
+        *,
+        logical_size: tuple[float, float] | None = None,
+    ) -> None:
         super().__init__()
         self._asset = asset
         self._index = 0
         self._timer_id: int | None = None
-        self._effective_size = (float(asset.width), float(asset.height))
+        base_w, base_h = (
+            logical_size
+            if logical_size is not None
+            else (float(asset.width), float(asset.height))
+        )
+        self._logical_size = (max(1.0, float(base_w)), max(1.0, float(base_h)))
+        self._effective_size = self._logical_size
         self.set_can_shrink(True)
         self.set_content_fit(Gtk.ContentFit.FILL)
-        self.set_size_request(asset.width, asset.height)
+        self.set_size_request(
+            max(1, round(self._logical_size[0])),
+            max(1, round(self._logical_size[1])),
+        )
         self.set_paintable(asset.frames[0])
+        self.connect("unmap", lambda *_: self.stop())
 
     def fit_to(
         self,
@@ -44,8 +59,8 @@ class AnimatedPicture(Gtk.Picture):
     ) -> tuple[float, float]:
         bounds = safe_rect(max_width, max_height, 0)
         width, height, _ = fit_dimensions(
-            self._asset.width,
-            self._asset.height,
+            self._logical_size[0],
+            self._logical_size[1],
             bounds,
             preserve_aspect=preserve_aspect,
         )
@@ -86,6 +101,7 @@ class TextLayerWidget(Gtk.Box):
         self.scale = max(0.01, float(scale))
         self.label = Gtk.Label(label=layer.text)
         self.label.set_wrap(False)
+        self.label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self.label.set_selectable(False)
         self.label.set_yalign(0.5)
         self.append(self.label)
@@ -107,7 +123,7 @@ class TextLayerWidget(Gtk.Box):
         max_height = max(1.0, float(max_height))
 
         # Padding is part of the layer's outer bounds. Cap pathological padding
-        # before text fitting so it can never make the layer larger than the screen.
+        # so it never starves the inner text area down to 1 px.
         requested_padding = (
             self.layer.background_padding_px * self.scale
             if self.layer.background_enabled
@@ -115,7 +131,7 @@ class TextLayerWidget(Gtk.Box):
         )
         max_padding = max(
             0.0,
-            min((max_width - 1.0) / 2.0, (max_height - 1.0) / 2.0),
+            min((max_width - 1.0) * 0.4, (max_height - 1.0) * 0.4),
         )
         self._set_effective_padding(min(requested_padding, max_padding))
 
@@ -128,10 +144,15 @@ class TextLayerWidget(Gtk.Box):
         if width <= max_width and height <= max_height:
             return width, height
 
-        # Text dimensions scale almost linearly with absolute Pango font size.
-        # Apply a direct estimate first, then tighten iteratively for rounding,
-        # hinting, emoji fallback, and font-specific extents.
-        ratio = min(max_width / width, max_height / height, 1.0)
+        pad2 = 2.0 * self._effective_padding
+        avail_w = max(1.0, max_width - pad2)
+        avail_h = max(1.0, max_height - pad2)
+
+        # Compute shrink ratio against the usable inner text budget rather than
+        # total padded outer bounds so large padding converges immediately.
+        text_w = max(1.0, width - pad2)
+        text_h = max(1.0, height - pad2)
+        ratio = min(avail_w / text_w, avail_h / text_h, 1.0)
         effective_px = max(0.1, base_px * ratio * 0.985)
         self._apply_font(effective_px)
 
@@ -139,16 +160,17 @@ class TextLayerWidget(Gtk.Box):
             width, height = self._measure()
             if width <= max_width + 0.01 and height <= max_height + 0.01:
                 return width, height
-            correction = min(max_width / width, max_height / height, 0.98)
+            text_w = max(1.0, width - pad2)
+            text_h = max(1.0, height - pad2)
+            correction = min(avail_w / text_w, avail_h / text_h, 0.98)
             effective_px = max(0.05, effective_px * correction * 0.985)
             self._apply_font(effective_px)
 
-        # Truly extreme text (for example megabytes of glyphs) has no physically
-        # lossless representation on a finite display. Keep shrinking below one
-        # logical pixel rather than letting GTK place the widget off-screen.
         width, height = self._measure()
         if width > max_width or height > max_height:
-            correction = min(max_width / width, max_height / height, 1.0)
+            text_w = max(1.0, width - pad2)
+            text_h = max(1.0, height - pad2)
+            correction = min(avail_w / text_w, avail_h / text_h, 1.0)
             self._apply_font(max(0.01, effective_px * correction))
             width, height = self._measure()
 
@@ -181,14 +203,16 @@ class TextLayerWidget(Gtk.Box):
                 round(foreground.blue * 65535),
             )
         )
-        try:
-            attrs.insert(
-                Pango.attr_foreground_alpha_new(round(foreground.alpha * 65535))
-            )
-            self.label.set_opacity(1.0)
-        except AttributeError:
-            # Older Pango introspection fallback.
-            self.label.set_opacity(foreground.alpha)
+        if foreground.alpha <= 0.0:
+            # Pango's attr_foreground_alpha_new expects [1, 65536]; hide label cleanly.
+            self.label.set_opacity(0.0)
+        else:
+            alpha_16 = max(1, min(65535, round(foreground.alpha * 65535)))
+            try:
+                attrs.insert(Pango.attr_foreground_alpha_new(alpha_16))
+                self.label.set_opacity(1.0)
+            except AttributeError:
+                self.label.set_opacity(foreground.alpha)
 
         self.label.set_attributes(attrs)
 
@@ -206,16 +230,17 @@ class TextLayerWidget(Gtk.Box):
         self.label.set_xalign(xalign)
 
     def _apply_colors(self) -> None:
+        if not self.layer.background_enabled:
+            return
         background = _parse_rgba(
             self.layer.background_color,
             "#00000099",
         )
-        alpha = background.alpha if self.layer.background_enabled else 0.0
         css = (
             "box {"
             f"background-color: rgba({round(background.red * 255)},"
             f"{round(background.green * 255)},"
-            f"{round(background.blue * 255)},{alpha:.6f});"
+            f"{round(background.blue * 255)},{background.alpha:.6f});"
             "}"
         )
         provider = Gtk.CssProvider()
@@ -258,6 +283,7 @@ class SceneView(Gtk.Fixed):
         media: MediaCache,
         *,
         scale: float = 1.0,
+        device_scale: float = 1.0,
         preview: bool = False,
         render_limit: tuple[int, int] | None = None,
     ) -> None:
@@ -265,22 +291,26 @@ class SceneView(Gtk.Fixed):
         self.scene = scene
         self.media = media
         self.scale = max(0.01, float(scale))
+        self.device_scale = max(1.0, float(device_scale))
         self.preview = preview
         self.render_limit = render_limit
         self._layers: list[RenderedLayer] = []
         self._animations: list[AnimatedPicture] = []
         self._layout_pending = False
+        self._relayout_id: int | None = None
         self._rng = random.Random()
         self._random_candidates: dict[str, list[tuple[float, float]]] = {}
 
         self.add_css_class("subliminal-scene")
         self.set_hexpand(True)
         self.set_vexpand(True)
+        self.set_overflow(Gtk.Overflow.HIDDEN)
         # Children are initially inserted at (0, 0). Never expose that temporary
         # state: reveal only after a complete valid layout has been applied.
         self.set_opacity(0.0)
         self.connect("notify::width", self._on_size_changed)
         self.connect("notify::height", self._on_size_changed)
+        self.connect("unmap", self._on_teardown)
         self._build()
 
     def prepare_flash(self, width: float, height: float) -> None:
@@ -297,6 +327,24 @@ class SceneView(Gtk.Fixed):
     def stop_animations(self) -> None:
         for animation in self._animations:
             animation.stop()
+
+    def _on_teardown(self, *_args) -> None:
+        self.stop_animations()
+        self._cancel_relayout()
+
+    def _cancel_relayout(self) -> None:
+        self._layout_pending = False
+        if self._relayout_id is not None:
+            try:
+                GLib.source_remove(self._relayout_id)
+            except Exception:
+                pass
+            self._relayout_id = None
+
+    def _schedule_relayout(self) -> None:
+        if not self._layout_pending and self._relayout_id is None:
+            self._layout_pending = True
+            self._relayout_id = GLib.idle_add(self._relayout)
 
     def _reroll_random_candidates(self) -> None:
         self._random_candidates = {
@@ -319,13 +367,14 @@ class SceneView(Gtk.Fixed):
                 if not self.preview:
                     continue
                 widget = Gtk.Label(label=f"⚠ {layer.name}")
+                widget.set_ellipsize(Pango.EllipsizeMode.END)
                 widget.add_css_class("preview-error")
             self.put(widget, 0.0, 0.0)
             self._layers.append(RenderedLayer(layer, widget))
 
         if self.preview:
             self._reroll_random_candidates()
-        GLib.idle_add(self._relayout)
+        self._schedule_relayout()
 
     def _make_widget(self, layer: Layer) -> Gtk.Widget:
         if isinstance(layer, TextLayer):
@@ -335,29 +384,33 @@ class SceneView(Gtk.Fixed):
     def _make_image(self, layer: ImageLayer) -> Gtk.Widget:
         if not layer.path:
             raise FileNotFoundError("No image selected")
+        raster_scale = self.scale * self.device_scale
         max_width = None
         max_height = None
         if self.render_limit is not None:
-            max_width = max(1, round(self.render_limit[0] * self.scale))
-            max_height = max(1, round(self.render_limit[1] * self.scale))
+            max_width = max(1, round(self.render_limit[0] * raster_scale))
+            max_height = max(1, round(self.render_limit[1] * raster_scale))
         asset = self.media.load(
             layer,
-            self.scale,
+            raster_scale,
             max_width=max_width,
             max_height=max_height,
         )
-        picture = AnimatedPicture(asset)
+        logical_size = (
+            max(1.0, asset.width / self.device_scale),
+            max(1.0, asset.height / self.device_scale),
+        )
+        picture = AnimatedPicture(asset, logical_size=logical_size)
         picture.set_opacity(max(0.0, min(1.0, layer.opacity)))
         if asset.animated:
             self._animations.append(picture)
         return picture
 
     def _on_size_changed(self, *_args) -> None:
-        if not self._layout_pending:
-            self._layout_pending = True
-            GLib.idle_add(self._relayout)
+        self._schedule_relayout()
 
     def _relayout(self) -> bool:
+        self._relayout_id = None
         self._layout_pending = False
         width = self.get_width()
         height = self.get_height()
