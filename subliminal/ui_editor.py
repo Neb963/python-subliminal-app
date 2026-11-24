@@ -31,7 +31,7 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         self._folder_model_refresh_id: int | None = None
         self._preview_refresh_id: int | None = None
         self._active_dialog = None
-        self.connect("destroy", self._on_destroy)
+        self.connect("unmap", self._on_destroy)
 
         outer = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
         outer.set_hexpand(True)

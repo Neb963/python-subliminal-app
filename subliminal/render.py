@@ -49,7 +49,6 @@ class AnimatedPicture(Gtk.Picture):
         )
         self.set_paintable(asset.frames[0])
         self.connect("unmap", lambda *_: self.stop())
-        self.connect("destroy", lambda *_: self.stop())
 
     def fit_to(
         self,
@@ -312,7 +311,6 @@ class SceneView(Gtk.Fixed):
         self.connect("notify::width", self._on_size_changed)
         self.connect("notify::height", self._on_size_changed)
         self.connect("unmap", self._on_teardown)
-        self.connect("destroy", self._on_teardown)
         self._build()
 
     def prepare_flash(self, width: float, height: float) -> None:
