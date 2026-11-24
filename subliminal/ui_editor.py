@@ -62,7 +62,16 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         self.right_paned.set_shrink_end_child(False)
 
         self.connect("map", self._on_editor_allocation_ready)
-        self.connect("notify::width", self._on_editor_allocation_ready)
+
+    def do_size_allocate(self, width: int, height: int, baseline: int) -> None:
+        Gtk.Box.do_size_allocate(self, width, height, baseline)
+        if not self._pane_positions_initialized and width > 1:
+            GLib.idle_add(self._run_editor_allocation_ready)
+        self._on_preview_allocation_changed()
+
+    def _run_editor_allocation_ready(self) -> bool:
+        self._on_editor_allocation_ready()
+        return GLib.SOURCE_REMOVE
 
     def _on_editor_allocation_ready(self, *_args) -> None:
         if self._pane_positions_initialized:

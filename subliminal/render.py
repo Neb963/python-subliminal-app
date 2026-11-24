@@ -340,6 +340,7 @@ class SceneView(Gtk.Overlay):
         self._animations: list[AnimatedPicture] = []
         self._layout_pending = False
         self._relayout_id: int | None = None
+        self._last_allocated_size: tuple[int, int] = (0, 0)
         self._rng = random.Random()
         self._random_candidates: dict[str, list[tuple[float, float]]] = {}
 
@@ -363,10 +364,14 @@ class SceneView(Gtk.Overlay):
         # Children are initially inserted at (0, 0). Never expose that temporary
         # state: reveal only after a complete valid layout has been applied.
         self.set_opacity(0.0)
-        self.connect("notify::width", self._on_size_changed)
-        self.connect("notify::height", self._on_size_changed)
         self.connect("unmap", self._on_teardown)
         self._build()
+
+    def do_size_allocate(self, width: int, height: int, baseline: int) -> None:
+        Gtk.Overlay.do_size_allocate(self, width, height, baseline)
+        if width > 1 and height > 1 and (width, height) != self._last_allocated_size:
+            self._last_allocated_size = (width, height)
+            self._schedule_relayout()
 
     def put(self, widget: Gtk.Widget, x: float, y: float) -> None:
         self._fixed.put(widget, x, y)
