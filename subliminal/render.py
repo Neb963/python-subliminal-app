@@ -311,8 +311,13 @@ class RenderedLayer:
     widget: Gtk.Widget
 
 
-class SceneView(Gtk.Fixed):
-    """Renders one scene with strict safe-screen placement."""
+class SceneView(Gtk.Overlay):
+    """Renders one scene with strict safe-screen placement.
+
+    Uses Gtk.Overlay with an empty base child and a non-measured Gtk.Fixed
+    overlay so layer children NEVER propagate minimum/natural size upward to
+    inflate Gtk.AspectFrame, Gtk.Paned, or OverlayWindow.
+    """
 
     def __init__(
         self,
@@ -338,6 +343,19 @@ class SceneView(Gtk.Fixed):
         self._rng = random.Random()
         self._random_candidates: dict[str, list[tuple[float, float]]] = {}
 
+        self._base = Gtk.Box()
+        self._base.set_hexpand(True)
+        self._base.set_vexpand(True)
+        self.set_child(self._base)
+
+        self._fixed = Gtk.Fixed()
+        self._fixed.set_hexpand(True)
+        self._fixed.set_vexpand(True)
+        self._fixed.set_overflow(Gtk.Overflow.HIDDEN)
+        self.add_overlay(self._fixed)
+        self.set_measure_overlay(self._fixed, False)
+        self.set_clip_overlay(self._fixed, True)
+
         self.add_css_class("subliminal-scene")
         self.set_hexpand(True)
         self.set_vexpand(True)
@@ -350,16 +368,14 @@ class SceneView(Gtk.Fixed):
         self.connect("unmap", self._on_teardown)
         self._build()
 
-    def do_measure(
-        self,
-        orientation: Gtk.Orientation,
-        for_size: int,
-    ) -> tuple[int, int, int, int]:
-        # SceneView is strictly viewport-bound: its size is dictated top-down
-        # by the editor preview frame or live monitor surface, never bottom-up
-        # by layer children. Returning (0, 0) prevents long text or large images
-        # from inflating Gtk.AspectFrame / Gtk.Paned and clipping the canvas.
-        return 0, 0, -1, -1
+    def put(self, widget: Gtk.Widget, x: float, y: float) -> None:
+        self._fixed.put(widget, x, y)
+
+    def move(self, widget: Gtk.Widget, x: float, y: float) -> None:
+        self._fixed.move(widget, x, y)
+
+    def get_child_position(self, widget: Gtk.Widget) -> tuple[float, float]:
+        return self._fixed.get_child_position(widget)
 
     def prepare_flash(self, width: float, height: float) -> None:
         self._reroll_random_candidates()
