@@ -34,6 +34,13 @@ CSS = b"""
     border-radius: 6px;
     padding: 8px;
 }
+.subliminal-toolbar .toolbar-button {
+    padding-left: 7px;
+    padding-right: 7px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    min-height: 24px;
+}
 """
 
 

@@ -6,9 +6,9 @@ The compositor-facing implementation remains deliberately small: GTK4 + PyGObjec
 
 ## Current release
 
-**1.4.1**
+**1.6.0**
 
-Version 1.4.1 is primarily a stability/layout release. It fixes editor freezes around folders and font selection, prevents temporary top-left preview piles, enforces screen-safe layer placement, adds text backgrounds and independent text alignment, and hardens SVG rasterization so extreme or stretched SVGs remain bounded before allocation.
+Version 1.6.0 integrates the responsive/native UI refinement pass with comprehensive stability, overlay, rendering, config, and lifecycle bug fixes. It keeps the top toolbar on one stable line across the supported window range, separates navigation buttons cleanly, prevents pane/header clipping in non-maximized windows, contains pathological long text inside preview/overlay bounds, minimizes routine scrollbars, compacts and aligns the Properties inspector, makes long names/paths safe, and makes the editor preview follow the target monitor's aspect ratio and scale — while preserving all audit fixes for overlay lifecycle, HiDPI media rasterization, Pango alpha handling, async dialog safety, atomic persistence, and clean GTK4 shutdown.
 
 ## Features
 
@@ -99,7 +99,7 @@ The left pane contains folders and scenes.
 
 - **+ Folder** creates an organizational folder.
 - **+ Scene** creates a scene in the selected/current folder.
-- **Selected name** renames the selected folder or scene.
+- The footer shows **Scene name** or **Folder name** according to the current selection.
 - **Duplicate** duplicates a scene.
 - Deleting a folder moves its scenes to **Unfiled** rather than deleting those scenes.
 - The Folder selector above the canvas moves the current scene to another folder.
@@ -110,22 +110,42 @@ Folder selection/movement is deliberately isolated from renderer rebuilding. The
 
 ### Canvas
 
-The center pane previews the selected scene.
+The center pane previews the selected scene using the active/selected monitor's aspect ratio and dimensions.
 
-The preview is now hidden until its first complete layout is calculated. Property edits are debounced, so intermediate children at `(0, 0)` are never intentionally exposed.
+The preview is hidden until its first complete layout is calculated. Property edits are debounced, so intermediate children at `(0, 0)` are never intentionally exposed. Preview scale is derived from the real preview allocation and target monitor rather than using a fixed editor scale.
 
-**Reroll preview** chooses another randomized placement without modifying saved fixed coordinates.
+**Reroll** chooses another randomized placement without modifying saved fixed coordinates.
 
 ### Layers / Properties
 
 Every text/image layer has an independent editable **Name**.
 
+The inspector uses compact native sections rather than one wide right-aligned label column. Related controls are paired where that reduces space without sacrificing clarity; optional background controls are revealed only when enabled.
+
 Position can be either:
 
 - fixed Anchor + X/Y + offsets; or
-- **Random → New position on every flash**.
+- **Random each flash**.
 
 Visual property edits invalidate only the currently edited scene's renderer rather than rebuilding every scene on every monitor.
+
+The Layers list grows naturally for small scenes and scrolls only when the layer count actually requires it. Properties use vertical scrolling only when the available height is genuinely insufficient; horizontal scrolling is disabled by design.
+
+
+### Responsive/native layout
+
+The main editor is designed around a supported minimum window size of **1000×650**.
+
+- Library and Inspector keep compact stable widths while Canvas absorbs most window growth.
+- Long folder, scene and layer names are ellipsized with full-value tooltips rather than increasing pane requisitions.
+- Long image paths stay contained inside the File field.
+- The top toolbar remains one row at every supported window width; it no longer reparents controls into a second row.
+- Navigation buttons are independent native buttons with deliberate spacing rather than a zero-gap pseudo-segmented group.
+- Import and Export remain textual; Start/Pause/Stop/Test/Quit use compact native symbolic controls with tooltips.
+- Runtime state reserves a stable width. **Running** stays in the same position while the current waiting/flashing phase is available in the tooltip, so phase changes never move neighboring controls.
+- Canvas-header controls are allocation-checked and preview drawing is clipped at the preview/scene boundary so long content cannot paint into adjacent panes or header chrome.
+- Hidden Timing/Displays/Settings pages do not dictate the active Editor page's width.
+
 
 ## Text background
 
@@ -170,6 +190,8 @@ For example, a layer may be anchored at the bottom-right of the screen while its
 The renderer follows one invariant:
 
 > Every visible layer's final outer rectangle must fit inside its usable monitor/canvas rectangle.
+
+`SceneView` also clips child drawing at its own allocation. Extremely long unbroken text uses a last-resort character-wrap fitting pass so GTK cannot retain a natural child allocation wider than the preview/overlay surface.
 
 The sequence is:
 
@@ -274,13 +296,18 @@ The core job covers:
 The Fedora runtime job installs the native GTK stack and runs a live GTK session under Xvfb. Its smoke test exercises:
 
 - repeated folder switching;
-- repeated font-family changes through the actual `Gtk.FontDialogButton` signal path;
+- repeated font-family changes through the asynchronous native `Gtk.FontDialog` family chooser path;
 - debounced editor callbacks;
 - huge fonts and background padding;
 - huge positive/negative offsets;
 - oversized images;
 - randomized layout rerolls;
-- actual `Gtk.Fixed` child allocations staying within the canvas.
+- actual `Gtk.Fixed` child allocations staying within the canvas;
+- responsive editor allocations at 1000×650, 1100×700, 1324×1010, 1600×900 and 1920×1080;
+- single-row toolbar geometry at every supported width, deliberate navigation gaps and phase-stable button positions;
+- normal and expanded text properties, image properties and many-layer scrolling;
+- pathological long names, paths, monitor descriptions and configuration paths;
+- a larger 16px application font to catch theme/font-dependent requisition regressions.
 
 KWin-specific layer-shell composition itself still requires a real Plasma Wayland session and cannot be validated by Xvfb.
 

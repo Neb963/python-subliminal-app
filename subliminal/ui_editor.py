@@ -30,30 +30,47 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         self._library_refresh_id: int | None = None
         self._folder_model_refresh_id: int | None = None
         self._preview_refresh_id: int | None = None
+        self._preview_last_size: tuple[int, int] | None = None
+        self._preview_used_fallback_scale = False
         self._active_dialog = None
-        self.connect("unmap", self._on_destroy)
+        self.connect("unmap", self._on_unmap)
 
-        outer = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-        outer.set_hexpand(True)
-        outer.set_vexpand(True)
-        self.append(outer)
+        self._pane_positions_initialized = False
 
-        library = self._build_library()
-        outer.set_start_child(library)
-        outer.set_resize_start_child(False)
-        outer.set_shrink_start_child(False)
+        self.outer_paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        self.outer_paned.set_hexpand(True)
+        self.outer_paned.set_vexpand(True)
+        self.append(self.outer_paned)
 
-        right_paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
-        outer.set_end_child(right_paned)
-        outer.set_resize_end_child(True)
+        self.library_panel = self._build_library()
+        self.outer_paned.set_start_child(self.library_panel)
+        self.outer_paned.set_resize_start_child(False)
+        self.outer_paned.set_shrink_start_child(False)
 
-        canvas = self._build_canvas()
-        inspector = self._build_inspector()
-        right_paned.set_start_child(canvas)
-        right_paned.set_end_child(inspector)
-        right_paned.set_resize_start_child(True)
-        right_paned.set_resize_end_child(False)
-        right_paned.set_shrink_end_child(False)
+        self.right_paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        self.outer_paned.set_end_child(self.right_paned)
+        self.outer_paned.set_resize_end_child(True)
+
+        self.canvas_panel = self._build_canvas()
+        self.inspector_panel = self._build_inspector()
+        self.right_paned.set_start_child(self.canvas_panel)
+        self.right_paned.set_end_child(self.inspector_panel)
+        self.right_paned.set_resize_start_child(True)
+        self.right_paned.set_resize_end_child(False)
+        self.right_paned.set_shrink_end_child(False)
+
+        self.connect("map", self._on_editor_allocation_ready)
+        self.connect("notify::width", self._on_editor_allocation_ready)
+
+    def _on_editor_allocation_ready(self, *_args) -> None:
+        if self._pane_positions_initialized:
+            return
+        right_width = self.right_paned.get_width()
+        if right_width < 400:
+            return
+        self.outer_paned.set_position(220)
+        self.right_paned.set_position(max(320, right_width - 340))
+        self._pane_positions_initialized = True
 
     @property
     def _loading(self) -> bool:
@@ -74,7 +91,7 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         if self._preview_view is not None:
             self._preview_view.start_animations()
 
-    def _on_destroy(self, *_args) -> None:
+    def _on_unmap(self, *_args) -> None:
         for attr in (
             "_library_refresh_id",
             "_folder_model_refresh_id",
@@ -85,6 +102,19 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
                 GLib.source_remove(source_id)
                 setattr(self, attr, None)
         self.pause_preview()
+
+    @classmethod
+    def _set_ellipsized_label(
+        cls,
+        label: Gtk.Label,
+        value: str,
+        *,
+        max_chars: int,
+    ) -> None:
+        label.set_label(value)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_max_width_chars(max_chars)
+        label.set_tooltip_text(value if value else None)
 
     def refresh(self) -> None:
         for attr in (
@@ -157,7 +187,12 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         row.row_kind = "folder"
         row.folder_id = folder.id
         row.scene_id = None
-        label = Gtk.Label(label=f"▾  {folder.name}")
+        label = Gtk.Label()
+        self._set_ellipsized_label(
+            label,
+            f"▾  {folder.name}",
+            max_chars=28,
+        )
         label.set_xalign(0.0)
         label.set_margin_top(7)
         label.set_margin_bottom(5)
@@ -187,7 +222,12 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         row.row_kind = "scene"
         row.folder_id = scene.folder_id
         row.scene_id = scene.id
-        label = Gtk.Label(label=scene.name)
+        label = Gtk.Label()
+        EditorPage._set_ellipsized_label(
+            label,
+            scene.name,
+            max_chars=28,
+        )
         label.set_xalign(0.0)
         label.set_margin_top(5)
         label.set_margin_bottom(5)
@@ -225,14 +265,30 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
             scene = self.selected_scene()
             folder = self._find_folder(self._folder_id)
             if scene is not None:
+                self.library_name_label.set_label("Scene name")
                 self.library_name.set_text(scene.name)
                 self.library_name.set_sensitive(True)
+                self.duplicate_scene_button.set_sensitive(True)
+                self.library_delete_button.set_sensitive(True)
+                self.library_delete_button.set_tooltip_text(
+                    "Delete the selected scene"
+                )
             elif folder is not None:
+                self.library_name_label.set_label("Folder name")
                 self.library_name.set_text(folder.name)
                 self.library_name.set_sensitive(True)
+                self.duplicate_scene_button.set_sensitive(False)
+                self.library_delete_button.set_sensitive(True)
+                self.library_delete_button.set_tooltip_text(
+                    "Delete this folder and move its scenes to Unfiled"
+                )
             else:
+                self.library_name_label.set_label("Selection")
                 self.library_name.set_text("")
                 self.library_name.set_sensitive(False)
+                self.duplicate_scene_button.set_sensitive(False)
+                self.library_delete_button.set_sensitive(False)
+                self.library_delete_button.set_tooltip_text(None)
         finally:
             self._loading = False
 
@@ -263,18 +319,27 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
             if getattr(row, "row_kind", None) == "scene":
                 scene = self._find_scene(getattr(row, "scene_id", None))
                 if scene is not None:
-                    label.set_label(scene.name)
+                    self._set_ellipsized_label(
+                        label,
+                        scene.name,
+                        max_chars=28,
+                    )
             elif getattr(row, "row_kind", None) == "folder":
                 folder = self._find_folder(getattr(row, "folder_id", None))
                 if folder is not None:
-                    label.set_label(f"▾  {folder.name}")
+                    self._set_ellipsized_label(
+                        label,
+                        f"▾  {folder.name}",
+                        max_chars=28,
+                    )
 
     def _refresh_folder_dropdown(self) -> None:
         self._folder_choices = [None] + [
             folder.id for folder in self.controller.config.folders
         ]
         labels = ["Unfiled"] + [
-            folder.name for folder in self.controller.config.folders
+            self._short_name(folder.name, 32)
+            for folder in self.controller.config.folders
         ]
         self._loading = True
         try:
@@ -306,6 +371,10 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
             except ValueError:
                 index = 0
             self.scene_folder.set_selected(index)
+            folder = self._find_folder(scene.folder_id)
+            self.scene_folder.set_tooltip_text(
+                folder.name if folder is not None else "Unfiled"
+            )
         finally:
             self._loading = False
 
@@ -431,7 +500,12 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
                 row = Gtk.ListBoxRow()
                 row.layer_id = layer.id
                 prefix = "T" if isinstance(layer, TextLayer) else "▧"
-                label = Gtk.Label(label=f"{prefix}  {layer.name}")
+                label = Gtk.Label()
+                self._set_ellipsized_label(
+                    label,
+                    f"{prefix}  {layer.name}",
+                    max_chars=38,
+                )
                 label.set_xalign(0.0)
                 label.set_margin_top(6)
                 label.set_margin_bottom(6)
@@ -465,10 +539,10 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
                 self.text_name.set_text(layer.name)
                 self.text_enabled.set_active(layer.enabled)
                 self.text_view.get_buffer().set_text(layer.text)
-                font_desc = Pango.FontDescription.new()
-                font_desc.set_family(layer.font_family)
-                font_desc.set_size(12 * Pango.SCALE)
-                self.font_button.set_font_desc(font_desc)
+                self._set_font_family_selection(
+                    layer.font_family,
+                    update_model=False,
+                )
                 self.font_size.set_value(layer.font_size_px)
                 self.bold.set_active(layer.bold)
                 self.italic.set_active(layer.italic)
@@ -501,6 +575,7 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
                 self.image_name.set_text(layer.name)
                 self.image_enabled.set_active(layer.enabled)
                 self.image_path.set_text(layer.path)
+                self.image_path.set_tooltip_text(layer.path or "No image selected")
                 self.auto_width.set_active(layer.width_px is None)
                 self.auto_height.set_active(layer.height_px is None)
                 self.image_width.set_sensitive(layer.width_px is not None)
@@ -538,6 +613,71 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         position.offset_x = controls["ox"].get_value_as_int()
         position.offset_y = controls["oy"].get_value_as_int()
 
+    def _choose_font_family(self, *_args) -> None:
+        origin_scene_id = self._scene_id
+        origin_layer_id = self._layer_id
+        if origin_scene_id is None or origin_layer_id is None:
+            return
+        parent = self.get_root()
+        if not isinstance(parent, Gtk.Window):
+            parent = None
+        self.font_dialog.choose_family(
+            parent,
+            None,
+            None,
+            lambda dialog, result: self._on_font_family_chosen(
+                dialog, result, origin_scene_id, origin_layer_id
+            ),
+        )
+
+    def _on_font_family_chosen(
+        self,
+        dialog,
+        result,
+        origin_scene_id: str | None = None,
+        origin_layer_id: str | None = None,
+    ) -> None:
+        try:
+            family = dialog.choose_family_finish(result)
+        except GLib.Error:
+            # Dismissal/cancellation is a normal dialog outcome.
+            return
+        if family is None:
+            return
+        value = (family.get_name() or "Sans").strip() or "Sans"
+        if origin_scene_id is None or (
+            origin_scene_id == self._scene_id
+            and origin_layer_id == self._layer_id
+        ):
+            self._set_font_family_selection(value, update_model=True)
+            return
+        scene = self._find_scene(origin_scene_id)
+        if scene is None:
+            return
+        layer = next(
+            (item for item in scene.layers if item.id == origin_layer_id),
+            None,
+        )
+        if not isinstance(layer, TextLayer):
+            return
+        layer.font_family = value
+        self.controller.config_changed("visual", scene.id)
+        if self._scene_id == scene.id:
+            self._request_preview_refresh()
+
+    def _set_font_family_selection(
+        self,
+        family: str,
+        *,
+        update_model: bool,
+    ) -> None:
+        value = (family or "Sans").strip() or "Sans"
+        self._selected_font_family = value
+        self.font_button.set_label(self._short_name(value, 28))
+        self.font_button.set_tooltip_text(value)
+        if update_model and not self._loading:
+            self._update_text()
+
     def _update_text_name(self, entry) -> None:
         if self._loading:
             return
@@ -574,12 +714,7 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         start, end = self.text_view.get_buffer().get_bounds()
         layer.text = self.text_view.get_buffer().get_text(start, end, True)
         layer.enabled = self.text_enabled.get_active()
-        desc = self.font_button.get_font_desc()
-        layer.font_family = (
-            desc.get_family()
-            if desc is not None and desc.get_family()
-            else "Sans"
-        )
+        layer.font_family = self._selected_font_family or "Sans"
         layer.font_size_px = self.font_size.get_value_as_int()
         layer.bold = self.bold.get_active()
         layer.italic = self.italic.get_active()
@@ -618,6 +753,7 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         self._update_text()
 
     def _set_text_background_sensitive(self, enabled: bool) -> None:
+        self.text_background_revealer.set_reveal_child(enabled)
         self.text_background_color.set_sensitive(enabled)
         self.text_background_padding.set_sensitive(enabled)
 
@@ -655,12 +791,19 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         prefix = "T" if isinstance(layer, TextLayer) else "▧"
         child = row.get_child()
         if isinstance(child, Gtk.Label):
-            child.set_label(f"{prefix}  {layer.name}")
+            self._set_ellipsized_label(
+                child,
+                f"{prefix}  {layer.name}",
+                max_chars=38,
+            )
 
     def _on_auto_size_toggled(self, *_args) -> None:
         self.image_width.set_sensitive(not self.auto_width.get_active())
         self.image_height.set_sensitive(not self.auto_height.get_active())
         self._update_image()
+
+    def refresh_preview_context(self) -> None:
+        self._request_preview_refresh(0)
 
     def _request_preview_refresh(self, delay_ms: int = 75) -> None:
         if self._preview_refresh_id is not None:
@@ -675,35 +818,81 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         self._refresh_preview()
         return GLib.SOURCE_REMOVE
 
+    def _on_preview_allocation_changed(self, *_args) -> None:
+        width = self.preview_frame.get_width()
+        height = self.preview_frame.get_height()
+        if width < 40 or height < 40:
+            return
+        size = (width, height)
+        if self._preview_last_size is None:
+            self._preview_last_size = size
+            if self._preview_used_fallback_scale:
+                self._request_preview_refresh(0)
+            return
+        if (
+            abs(size[0] - self._preview_last_size[0]) >= 4
+            or abs(size[1] - self._preview_last_size[1]) >= 4
+        ):
+            self._preview_last_size = size
+            self._request_preview_refresh(100)
+
+    def _preview_target_monitor(self):
+        monitors = self.controller.overlay.monitors()
+        if not monitors:
+            return None
+        display = self.controller.config.display
+        if display.mode == "selected" and display.connectors:
+            wanted = set(display.connectors)
+            for monitor in monitors:
+                if monitor.connector in wanted:
+                    return monitor
+        return monitors[0]
+
     def _refresh_preview(self) -> None:
         scene = self.selected_scene()
         if scene is None:
             if self._preview_view is not None:
                 self._preview_view.stop_animations()
                 self._preview_view = None
+            self.preview_info.set_label("Preview")
             self.preview_frame.set_child(Gtk.Label(label="Select a scene"))
             return
 
-        # Build the replacement first. SceneView remains hidden until it has a
-        # valid layout, so the old preview can stay visible during construction.
-        preview_scale = 0.33
+        monitor = self._preview_target_monitor()
+        if monitor is None:
+            target_width, target_height = 1920, 1080
+            preview_name = f"Preview · {target_width}×{target_height}"
+        else:
+            target_width = max(1, int(monitor.width))
+            target_height = max(1, int(monitor.height))
+            preview_name = (
+                f"Preview · {monitor.connector} · "
+                f"{target_width}×{target_height}"
+            )
+
+        self.preview_info.set_label(preview_name)
+        self.preview_info.set_tooltip_text(preview_name)
+        self.preview_aspect.set_ratio(target_width / target_height)
+
         preview_width = self.preview_frame.get_width()
         preview_height = self.preview_frame.get_height()
         if preview_width > 10 and preview_height > 10:
-            render_limit = (
-                max(1, round(preview_width / preview_scale)),
-                max(1, round(preview_height / preview_scale)),
+            preview_scale = min(
+                1.0,
+                preview_width / target_width,
+                preview_height / target_height,
             )
+            self._preview_used_fallback_scale = False
         else:
-            # Safe startup fallback before the preview frame is allocated.
-            render_limit = (1920, 1080)
+            preview_scale = min(1.0, 0.33)
+            self._preview_used_fallback_scale = True
 
         view = SceneView(
             scene,
             self.controller.overlay.media,
-            scale=preview_scale,
+            scale=max(0.01, preview_scale),
             preview=True,
-            render_limit=render_limit,
+            render_limit=(target_width, target_height),
         )
         old_view = self._preview_view
         self._preview_view = view
@@ -940,6 +1129,7 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
             if self._scene_id == scene.id:
                 if self._layer_id == layer.id:
                     self.image_path.set_text(layer.path)
+                    self.image_path.set_tooltip_text(layer.path)
                     self._refresh_layer_label()
                 self._request_preview_refresh()
         finally:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "subliminal-overlay"
-version = "1.4.1"
+version = "1.6.0"
 description = "Click-through subliminal text and image overlay for KDE Plasma Wayland"
 readme = "README.md"
 requires-python = ">=3.11"
