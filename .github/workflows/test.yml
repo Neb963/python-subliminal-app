@@ -99,7 +99,7 @@ jobs:
         run: |
           timeout 90s \
             dbus-run-session -- \
-            xvfb-run -a \
+            xvfb-run -a --server-args="-screen 0 2048x1200x24" \
             env PYTHONPATH=. GSK_RENDERER=cairo NO_AT_BRIDGE=1 \
             python3 tools/gtk_smoke.py
       - name: Compile against Fedora system Python
