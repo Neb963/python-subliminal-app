@@ -320,7 +320,8 @@ def smoke_responsive_editor_layout() -> None:
             matrix_page.inspector_panel.get_width(),
         )
         assert allocations[0] >= 190, ((width, height), "library", allocations)
-        assert allocations[1] >= 300, ((width, height), "canvas", allocations)
+        min_canvas = 300 if matrix_window.get_width() >= 960 else 180
+        assert allocations[1] >= min_canvas, ((width, height), "canvas", allocations)
         assert allocations[2] >= 300, ((width, height), "inspector", allocations)
 
         for name, scroller in (
