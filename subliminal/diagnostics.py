@@ -23,7 +23,9 @@ def run_diagnostics() -> int:
         return 2
 
     try:
-        Gtk.init()
+        if not Gtk.init_check():
+            print("GDK display: FAIL (Gtk.init_check returned False)")
+            return 3
         display = Gdk.Display.get_default()
         if display is None:
             print("GDK display: FAIL (no display)")
@@ -37,10 +39,15 @@ def run_diagnostics() -> int:
             monitor = monitors.get_item(index)
             geo = monitor.get_geometry()
             connector = monitor.get_connector() or f"monitor-{index + 1}"
-            refresh = monitor.get_refresh_rate() / 1000.0
+            refresh_mhz = monitor.get_refresh_rate()
+            refresh_text = (
+                f"{refresh_mhz / 1000.0:.2f} Hz"
+                if refresh_mhz > 0
+                else "unknown"
+            )
             print(
                 f"  {connector}: {geo.width}x{geo.height}, "
-                f"scale={monitor.get_scale_factor()}, refresh={refresh:.2f} Hz"
+                f"scale={monitor.get_scale_factor()}, refresh={refresh_text}"
             )
         return 0 if supported else 4
     except Exception as exc:

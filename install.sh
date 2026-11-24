@@ -24,15 +24,24 @@ rm -rf "$APP_DIR/subliminal"
 cp -a "$ROOT/subliminal" "$APP_DIR/subliminal"
 cp "$ROOT/pyproject.toml" "$APP_DIR/pyproject.toml"
 
+printf -v QUOTED_APP_DIR '%q' "$APP_DIR"
+printf -v QUOTED_BIN_PATH '%q' "$BIN_PATH"
+
 cat > "$BIN_PATH" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-APP_DIR="$APP_DIR"
+APP_DIR=$QUOTED_APP_DIR
 export PYTHONPATH="\$APP_DIR\${PYTHONPATH:+:\$PYTHONPATH}"
-export SUBLIMINAL_EXECUTABLE="$BIN_PATH"
+export SUBLIMINAL_EXECUTABLE=$QUOTED_BIN_PATH
 exec /usr/bin/python3 -m subliminal "\$@"
 EOF
 chmod +x "$BIN_PATH"
+
+ESCAPED_EXEC="${BIN_PATH//\\/\\\\}"
+ESCAPED_EXEC="${ESCAPED_EXEC//\"/\\\"}"
+ESCAPED_EXEC="${ESCAPED_EXEC//\$/\\\$}"
+ESCAPED_EXEC="${ESCAPED_EXEC//\`/\\\`}"
+ESCAPED_EXEC="${ESCAPED_EXEC//%/%%}"
 
 cat > "$DESKTOP_PATH" <<EOF
 [Desktop Entry]
@@ -40,8 +49,7 @@ Type=Application
 Version=1.0
 Name=Subliminal
 Comment=Click-through text and image overlay scheduler
-Exec="$BIN_PATH"
-TryExec=$BIN_PATH
+Exec="$ESCAPED_EXEC"
 Icon=preferences-desktop-display
 Terminal=false
 Categories=Utility;

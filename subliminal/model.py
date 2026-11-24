@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -20,11 +22,43 @@ ANCHORS: tuple[Anchor, ...] = (
     "left", "center", "right",
     "bottom-left", "bottom", "bottom-right",
 )
-
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$")
 
 
 def new_id() -> str:
     return uuid4().hex[:12]
+
+
+def _finite_float(value: object, default: float) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def _finite_int(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    number = _finite_float(value, float(default))
+    try:
+        return int(number)
+    except (ValueError, OverflowError):
+        return default
+
+
+def _require_dict(value: object, field_name: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected object for '{field_name}'.")
+    return value
+
+
+def _require_list(value: object, field_name: str) -> list:
+    if not isinstance(value, list):
+        raise ValueError(f"Expected list for '{field_name}'.")
+    return value
 
 
 @dataclass(slots=True)
@@ -140,16 +174,17 @@ def default_config() -> AppConfig:
 
 
 def position_from_dict(data: dict) -> Position:
-    anchor = data.get("anchor", "center")
+    mapping = _require_dict(data, "position")
+    anchor = mapping.get("anchor", "center")
     if anchor not in ANCHORS:
         anchor = "center"
     return Position(
-        x=float(data.get("x", 0.5)),
-        y=float(data.get("y", 0.5)),
+        x=_finite_float(mapping.get("x", 0.5), 0.5),
+        y=_finite_float(mapping.get("y", 0.5), 0.5),
         anchor=anchor,
-        offset_x=int(data.get("offset_x", 0)),
-        offset_y=int(data.get("offset_y", 0)),
-        randomize=bool(data.get("randomize", False)),
+        offset_x=_finite_int(mapping.get("offset_x", 0), 0),
+        offset_y=_finite_int(mapping.get("offset_y", 0), 0),
+        randomize=bool(mapping.get("randomize", False)),
     )
 
 
@@ -165,92 +200,115 @@ def _legacy_layer_name(data: dict, kind: str) -> str:
 
 
 def layer_from_dict(data: dict) -> Layer:
-    kind = data.get("kind", data.get("type", "text"))
-    position = position_from_dict(data.get("position", {}))
+    mapping = _require_dict(data, "layer")
+    kind = mapping.get("kind", mapping.get("type", "text"))
+    raw_position = mapping["position"] if "position" in mapping else {}
+    position = position_from_dict(raw_position)
     if kind == "image":
-        width = data.get("width_px", 320)
-        height = data.get("height_px")
+        width = mapping.get("width_px", 320)
+        height = mapping.get("height_px")
         return ImageLayer(
-            id=str(data.get("id") or new_id()),
-            name=_legacy_layer_name(data, "image"),
-            enabled=bool(data.get("enabled", True)),
-            path=str(data.get("path", "")),
+            id=str(mapping.get("id") or new_id()),
+            name=_legacy_layer_name(mapping, "image"),
+            enabled=bool(mapping.get("enabled", True)),
+            path=str(mapping.get("path", "")),
             position=position,
-            width_px=None if width is None else int(width),
-            height_px=None if height is None else int(height),
-            keep_aspect_ratio=bool(data.get("keep_aspect_ratio", True)),
-            opacity=float(data.get("opacity", 0.65)),
+            width_px=None if width is None else _finite_int(width, 320),
+            height_px=None if height is None else _finite_int(height, 240),
+            keep_aspect_ratio=bool(mapping.get("keep_aspect_ratio", True)),
+            opacity=_finite_float(mapping.get("opacity", 0.65), 0.65),
         )
     return TextLayer(
-        id=str(data.get("id") or new_id()),
-        name=_legacy_layer_name(data, "text"),
-        enabled=bool(data.get("enabled", True)),
-        text=str(data.get("text", "")),
+        id=str(mapping.get("id") or new_id()),
+        name=_legacy_layer_name(mapping, "text"),
+        enabled=bool(mapping.get("enabled", True)),
+        text=str(mapping.get("text", "")),
         position=position,
-        font_family=str(data.get("font_family", "Sans")),
-        font_size_px=int(data.get("font_size_px", 52)),
-        color=str(data.get("color", "#FFFFFFFF")),
-        bold=bool(data.get("bold", False)),
-        italic=bool(data.get("italic", False)),
-        underline=bool(data.get("underline", False)),
+        font_family=str(mapping.get("font_family", "Sans")),
+        font_size_px=_finite_int(mapping.get("font_size_px", 52), 52),
+        color=str(mapping.get("color", "#FFFFFFFF")),
+        bold=bool(mapping.get("bold", False)),
+        italic=bool(mapping.get("italic", False)),
+        underline=bool(mapping.get("underline", False)),
         alignment=(
-            data.get("alignment", "left")
-            if data.get("alignment", "left") in {"left", "center", "right"}
+            mapping.get("alignment", "left")
+            if mapping.get("alignment", "left") in {"left", "center", "right"}
             else "left"
         ),
-        background_enabled=bool(data.get("background_enabled", False)),
-        background_color=str(data.get("background_color", "#00000099")),
-        background_padding_px=int(data.get("background_padding_px", 8)),
-        opacity=float(data.get("opacity", 0.65)),
+        background_enabled=bool(mapping.get("background_enabled", False)),
+        background_color=str(mapping.get("background_color", "#00000099")),
+        background_padding_px=_finite_int(mapping.get("background_padding_px", 8), 8),
+        opacity=_finite_float(mapping.get("opacity", 0.65), 0.65),
     )
 
 
 def config_from_dict(data: dict) -> AppConfig:
-    schedule_data = data.get("schedule", {})
-    display_data = data.get("display", {})
+    mapping = _require_dict(data, "config")
+    schedule_data = _require_dict(
+        mapping["schedule"] if "schedule" in mapping else {},
+        "schedule",
+    )
+    display_data = _require_dict(
+        mapping["display"] if "display" in mapping else {},
+        "display",
+    )
+    raw_folders = _require_list(
+        mapping["folders"] if "folders" in mapping else [],
+        "folders",
+    )
+    raw_scenes = _require_list(
+        mapping["scenes"] if "scenes" in mapping else [],
+        "scenes",
+    )
+    raw_connectors = _require_list(
+        display_data["connectors"] if "connectors" in display_data else [],
+        "display.connectors",
+    )
 
     folders = [
         Folder(
-            id=str(item.get("id") or new_id()),
+            id=str(_require_dict(item, "folder").get("id") or new_id()),
             name=str(item.get("name", "Folder")),
         )
-        for item in data.get("folders", [])
-        if isinstance(item, dict)
+        for item in raw_folders
     ]
 
     scenes: list[Scene] = []
-    for raw_scene in data.get("scenes", []):
+    for raw_scene in raw_scenes:
+        scene_dict = _require_dict(raw_scene, "scene")
+        raw_layers = _require_list(
+            scene_dict["layers"] if "layers" in scene_dict else [],
+            "scene.layers",
+        )
         scenes.append(
             Scene(
-                id=str(raw_scene.get("id") or new_id()),
-                name=str(raw_scene.get("name", "Scene")),
+                id=str(scene_dict.get("id") or new_id()),
+                name=str(scene_dict.get("name", "Scene")),
                 folder_id=(
-                    str(raw_scene["folder_id"])
-                    if raw_scene.get("folder_id") is not None
+                    str(scene_dict["folder_id"])
+                    if scene_dict.get("folder_id") is not None
                     else None
                 ),
-                enabled=bool(raw_scene.get("enabled", True)),
-                layers=[layer_from_dict(item) for item in raw_scene.get("layers", [])],
+                enabled=bool(scene_dict.get("enabled", True)),
+                layers=[layer_from_dict(item) for item in raw_layers],
             )
         )
 
+    duration_ms = _finite_float(schedule_data.get("duration_ms", 50), 50.0)
+    default_frames = max(1, round(duration_ms / (1000.0 / 60.0)))
+
     cfg = AppConfig(
-        version=int(data.get("version", 1)),
-        start_on_launch=bool(data.get("start_on_launch", False)),
-        autostart=bool(data.get("autostart", False)),
+        version=_finite_int(mapping.get("version", 1), 1),
+        start_on_launch=bool(mapping.get("start_on_launch", False)),
+        autostart=bool(mapping.get("autostart", False)),
         schedule=ScheduleConfig(
-            break_ms=int(schedule_data.get("break_ms", schedule_data.get("interval_ms", 5000))),
-            visible_frames=int(
-                schedule_data.get(
-                    "visible_frames",
-                    max(
-                        1,
-                        round(
-                            float(schedule_data.get("duration_ms", 50))
-                            / (1000.0 / 60.0)
-                        ),
-                    ),
-                )
+            break_ms=_finite_int(
+                schedule_data.get("break_ms", schedule_data.get("interval_ms", 5000)),
+                5000,
+            ),
+            visible_frames=_finite_int(
+                schedule_data.get("visible_frames", default_frames),
+                default_frames,
             ),
             selection=(
                 schedule_data.get("selection", "random")
@@ -264,7 +322,7 @@ def config_from_dict(data: dict) -> AppConfig:
                 if display_data.get("mode", "all") in {"all", "selected"}
                 else "all"
             ),
-            connectors=[str(v) for v in display_data.get("connectors", [])],
+            connectors=[str(v) for v in raw_connectors],
         ),
         folders=folders,
         scenes=scenes,
@@ -281,9 +339,9 @@ def config_to_dict(config: AppConfig) -> dict:
 
 def normalize_config(config: AppConfig) -> None:
     config.version = 5
-    config.schedule.break_ms = max(100, int(config.schedule.break_ms))
+    config.schedule.break_ms = max(100, _finite_int(config.schedule.break_ms, 5000))
     config.schedule.visible_frames = max(
-        1, min(120, int(config.schedule.visible_frames))
+        1, min(120, _finite_int(config.schedule.visible_frames, 3))
     )
     if config.schedule.selection not in {"random", "sequential"}:
         config.schedule.selection = "random"
@@ -315,21 +373,23 @@ def normalize_config(config: AppConfig) -> None:
             layer.name = layer.name.strip() or (
                 "Text" if isinstance(layer, TextLayer) else "Image"
             )
-            layer.opacity = min(1.0, max(0.0, float(layer.opacity)))
-            layer.position.x = min(1.0, max(0.0, float(layer.position.x)))
-            layer.position.y = min(1.0, max(0.0, float(layer.position.y)))
+            layer.opacity = min(1.0, max(0.0, _finite_float(layer.opacity, 0.65)))
+            layer.position.x = min(1.0, max(0.0, _finite_float(layer.position.x, 0.5)))
+            layer.position.y = min(1.0, max(0.0, _finite_float(layer.position.y, 0.5)))
+            layer.position.offset_x = _finite_int(layer.position.offset_x, 0)
+            layer.position.offset_y = _finite_int(layer.position.offset_y, 0)
             if layer.position.anchor not in ANCHORS:
                 layer.position.anchor = "center"
             layer.position.randomize = bool(layer.position.randomize)
 
             if isinstance(layer, TextLayer):
-                layer.font_size_px = max(1, int(layer.font_size_px))
+                layer.font_size_px = max(1, _finite_int(layer.font_size_px, 52))
                 layer.font_family = layer.font_family.strip() or "Sans"
                 if layer.alignment not in {"left", "center", "right"}:
                     layer.alignment = "left"
                 layer.background_padding_px = max(
                     0,
-                    min(500, int(layer.background_padding_px)),
+                    min(500, _finite_int(layer.background_padding_px, 8)),
                 )
                 if not _valid_color(layer.color):
                     layer.color = "#FFFFFFFF"
@@ -337,12 +397,12 @@ def normalize_config(config: AppConfig) -> None:
                     layer.background_color = "#00000099"
             else:
                 if layer.width_px is not None:
-                    layer.width_px = max(1, int(layer.width_px))
+                    layer.width_px = max(1, _finite_int(layer.width_px, 320))
                 if layer.height_px is not None:
-                    layer.height_px = max(1, int(layer.height_px))
+                    layer.height_px = max(1, _finite_int(layer.height_px, 240))
 
 
-def validate_config(config: AppConfig) -> list[str]:
+def validate_config(config: AppConfig, *, strict_media: bool = True) -> list[str]:
     errors: list[str] = []
     if config.schedule.break_ms <= 0:
         errors.append("Break between flashes must be positive.")
@@ -361,18 +421,12 @@ def validate_config(config: AppConfig) -> list[str]:
         for layer in scene.layers:
             if not layer.name.strip():
                 errors.append("Layer names cannot be empty.")
-            if isinstance(layer, ImageLayer) and layer.path:
+            if strict_media and isinstance(layer, ImageLayer) and layer.path:
                 suffix = Path(layer.path).suffix.lower()
                 if suffix not in SUPPORTED_IMAGE_EXTENSIONS:
                     errors.append(f"Unsupported image format: {layer.path}")
     return errors
 
 
-def _valid_color(value: str) -> bool:
-    if not value.startswith("#") or len(value) not in {7, 9}:
-        return False
-    try:
-        int(value[1:], 16)
-        return True
-    except ValueError:
-        return False
+def _valid_color(value: object) -> bool:
+    return isinstance(value, str) and _HEX_COLOR_RE.fullmatch(value) is not None
