@@ -314,9 +314,10 @@ class RenderedLayer:
 class SceneView(Gtk.Overlay):
     """Renders one scene with strict safe-screen placement.
 
-    Uses Gtk.Overlay with an empty base child and a non-measured Gtk.Fixed
-    overlay so layer children NEVER propagate minimum/natural size upward to
-    inflate Gtk.AspectFrame, Gtk.Paned, or OverlayWindow.
+    Uses Gtk.Overlay with a 0x0 Gtk.DrawingArea base child (which emits GTK4's
+    native "resize" signal on every allocation change) and a non-measured
+    Gtk.Fixed overlay so layer children NEVER propagate minimum/natural size
+    upward to inflate Gtk.AspectFrame, Gtk.Paned, or OverlayWindow.
     """
 
     def __init__(
@@ -344,9 +345,10 @@ class SceneView(Gtk.Overlay):
         self._rng = random.Random()
         self._random_candidates: dict[str, list[tuple[float, float]]] = {}
 
-        self._base = Gtk.Box()
+        self._base = Gtk.DrawingArea()
         self._base.set_hexpand(True)
         self._base.set_vexpand(True)
+        self._base.connect("resize", self._on_base_resized)
         self.set_child(self._base)
 
         self._fixed = Gtk.Fixed()
@@ -367,8 +369,7 @@ class SceneView(Gtk.Overlay):
         self.connect("unmap", self._on_teardown)
         self._build()
 
-    def do_size_allocate(self, width: int, height: int, baseline: int) -> None:
-        Gtk.Overlay.do_size_allocate(self, width, height, baseline)
+    def _on_base_resized(self, _area, width: int, height: int) -> None:
         if width > 1 and height > 1 and (width, height) != self._last_allocated_size:
             self._last_allocated_size = (width, height)
             self._schedule_relayout()

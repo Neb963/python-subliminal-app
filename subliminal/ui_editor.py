@@ -63,15 +63,10 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
 
         self.connect("map", self._on_editor_allocation_ready)
 
-    def do_size_allocate(self, width: int, height: int, baseline: int) -> None:
-        Gtk.Box.do_size_allocate(self, width, height, baseline)
-        if not self._pane_positions_initialized and width > 1:
-            GLib.idle_add(self._run_editor_allocation_ready)
+    def _on_preview_base_resized(self, _area, _width: int, _height: int) -> None:
+        if not self._pane_positions_initialized:
+            self._on_editor_allocation_ready()
         self._on_preview_allocation_changed()
-
-    def _run_editor_allocation_ready(self) -> bool:
-        self._on_editor_allocation_ready()
-        return GLib.SOURCE_REMOVE
 
     def _on_editor_allocation_ready(self, *_args) -> None:
         if self._pane_positions_initialized:
@@ -907,9 +902,12 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
             preview=True,
             render_limit=(target_width, target_height),
         )
+        view._base.connect("resize", self._on_preview_base_resized)
         old_view = self._preview_view
         self._preview_view = view
         self.preview_frame.set_child(view)
+        if preview_width > 10 and preview_height > 10:
+            view.reapply_flash_layout(max(1, preview_width - 2), max(1, preview_height - 2))
         view.start_animations()
         if old_view is not None:
             old_view.stop_animations()
