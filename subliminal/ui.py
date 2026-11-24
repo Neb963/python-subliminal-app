@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .config import ConfigImportError
-from .gtk_runtime import Gtk
+from .gtk_runtime import GLib, Gtk, Pango
 from .ui_editor import EditorPage
 from .ui_pages import DisplaysPage, SettingsPage, TimingPage
 
@@ -21,17 +21,37 @@ class MainWindow(Gtk.ApplicationWindow):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.set_child(root)
 
-        toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        toolbar.set_margin_top(8)
-        toolbar.set_margin_bottom(8)
-        toolbar.set_margin_start(10)
-        toolbar.set_margin_end(10)
+        toolbar = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        toolbar.add_css_class("subliminal-toolbar")
+        self.toolbar = toolbar
+        self._toolbar_compact = False
+        toolbar.set_margin_top(7)
+        toolbar.set_margin_bottom(7)
+        toolbar.set_margin_start(7)
+        toolbar.set_margin_end(7)
         root.append(toolbar)
+
+        self.toolbar_left = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        self.toolbar_left.set_hexpand(False)
+        self.toolbar_left.set_valign(Gtk.Align.CENTER)
 
         title = Gtk.Label(label="Subliminal")
         title.add_css_class("title-2")
-        title.set_margin_end(8)
-        toolbar.append(title)
+        title.set_margin_end(2)
+        self.toolbar_left.append(title)
+
+        nav_group = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=6,
+        )
+        nav_group.set_valign(Gtk.Align.CENTER)
+        self.toolbar_left.append(nav_group)
 
         self.editor_nav = Gtk.ToggleButton(label="Editor")
         self.timing_nav = Gtk.ToggleButton(label="Timing")
@@ -46,49 +66,111 @@ class MainWindow(Gtk.ApplicationWindow):
             ("displays", self.displays_nav),
             ("settings", self.settings_nav),
         ):
+            button.set_valign(Gtk.Align.CENTER)
+            button.add_css_class("toolbar-button")
             button.connect("toggled", self._nav_toggled, name)
-            toolbar.append(button)
+            nav_group.append(button)
         self.editor_nav.set_active(True)
 
-        spacer = Gtk.Box()
-        spacer.set_hexpand(True)
-        toolbar.append(spacer)
+        self.toolbar_spacer = Gtk.Box()
+        self.toolbar_spacer.set_hexpand(True)
+        toolbar.append(self.toolbar_left)
+        toolbar.append(self.toolbar_spacer)
 
-        import_button = Gtk.Button(label="Import")
-        export_button = Gtk.Button(label="Export")
-        import_button.connect("clicked", self._import_config)
-        export_button.connect("clicked", self._export_config)
-        toolbar.append(import_button)
-        toolbar.append(export_button)
+        self.toolbar_right = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        self.toolbar_right.set_halign(Gtk.Align.END)
+        self.toolbar_right.set_valign(Gtk.Align.CENTER)
 
-        self.status_label = Gtk.Label(label="Stopped")
-        self.status_label.add_css_class("dim-label")
-        self.status_label.set_margin_start(8)
-        toolbar.append(self.status_label)
+        file_group = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=0,
+        )
+        file_group.add_css_class("linked")
+        self.toolbar_right.append(file_group)
+        self.import_button = Gtk.Button(label="Import")
+        self.export_button = Gtk.Button(label="Export")
+        self.import_button.add_css_class("toolbar-button")
+        self.export_button.add_css_class("toolbar-button")
+        self.import_button.connect("clicked", self._import_config)
+        self.export_button.connect("clicked", self._export_config)
+        file_group.append(self.import_button)
+        file_group.append(self.export_button)
 
-        self.start_button = Gtk.Button(label="Start")
-        self.pause_button = Gtk.Button(label="Pause")
-        self.stop_button = Gtk.Button(label="Stop")
-        self.test_button = Gtk.Button(label="Test")
-        self.quit_button = Gtk.Button(label="Quit")
+        # A homogeneous stack reserves the width of the longest status up-front,
+        # so waiting/flashing phase changes never shift neighboring controls.
+        self.status_stack = Gtk.Stack()
+        self.status_stack.set_hhomogeneous(True)
+        self.status_stack.set_vhomogeneous(True)
+        self.status_stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        self._status_labels: dict[str, Gtk.Label] = {}
+        for state, label_text in (
+            ("stopped", "Stopped"),
+            ("paused", "Paused"),
+            ("waiting", "Running"),
+            ("visible", "Running"),
+        ):
+            label = Gtk.Label(label=label_text)
+            label.add_css_class("dim-label")
+            label.set_xalign(0.5)
+            self.status_stack.add_named(label, state)
+            self._status_labels[state] = label
+        self.status_stack.set_size_request(74, -1)
+        self.toolbar_right.append(self.status_stack)
+
+        run_group = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=0,
+        )
+        run_group.add_css_class("linked")
+        self.toolbar_right.append(run_group)
+
+        self.start_button = Gtk.Button.new_from_icon_name(
+            "media-playback-start-symbolic"
+        )
+        self.pause_button = Gtk.Button.new_from_icon_name(
+            "media-playback-pause-symbolic"
+        )
+        self.stop_button = Gtk.Button.new_from_icon_name(
+            "media-playback-stop-symbolic"
+        )
+        self.test_button = Gtk.Button.new_from_icon_name(
+            "view-refresh-symbolic"
+        )
+        self.quit_button = Gtk.Button.new_from_icon_name(
+            "application-exit-symbolic"
+        )
+        self.start_button.set_tooltip_text("Start flashing")
+        self.pause_button.set_tooltip_text("Pause flashing")
+        self.stop_button.set_tooltip_text("Stop flashing")
+        self.test_button.set_tooltip_text("Test flash")
+        self.quit_button.set_tooltip_text("Quit Subliminal")
         self.start_button.add_css_class("suggested-action")
         for button in (
             self.start_button,
             self.pause_button,
             self.stop_button,
             self.test_button,
-            self.quit_button,
         ):
-            toolbar.append(button)
+            button.add_css_class("toolbar-button")
+            run_group.append(button)
+        self.quit_button.add_css_class("toolbar-button")
+        self.toolbar_right.append(self.quit_button)
 
         self.start_button.connect("clicked", lambda *_: self.controller.start())
         self.pause_button.connect("clicked", lambda *_: self.controller.pause())
         self.stop_button.connect("clicked", lambda *_: self.controller.stop())
         self.test_button.connect(
             "clicked",
-            lambda *_: self.controller.test_flash(self.editor_page.selected_scene()),
+            lambda *_: self.controller.test_flash(
+                self.editor_page.selected_scene()
+            ),
         )
         self.quit_button.connect("clicked", lambda *_: self.controller.quit())
+
+        toolbar.append(self.toolbar_right)
 
         self.banner = Gtk.Label()
         self.banner.set_wrap(True)
@@ -101,6 +183,10 @@ class MainWindow(Gtk.ApplicationWindow):
         root.append(self.banner)
 
         self.page_stack = Gtk.Stack()
+        # Hidden pages must not dictate the active page's requisition. This is
+        # particularly important for long monitor descriptions/config paths.
+        self.page_stack.set_hhomogeneous(False)
+        self.page_stack.set_vhomogeneous(False)
         self.page_stack.set_hexpand(True)
         self.page_stack.set_vexpand(True)
         root.append(self.page_stack)
@@ -127,13 +213,17 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_runtime_state(self.controller.scheduler.state.value)
 
     def set_runtime_state(self, state: str) -> None:
-        labels = {
-            "stopped": "Stopped",
-            "paused": "Paused",
-            "waiting": "Running · waiting",
-            "visible": "Running · flashing",
+        known_state = state if state in self._status_labels else "stopped"
+        self.status_stack.set_visible_child_name(known_state)
+        phase_tooltips = {
+            "stopped": "Flashing is stopped",
+            "paused": "Flashing is paused",
+            "waiting": "Running — waiting for the next flash",
+            "visible": "Running — flash currently visible",
         }
-        self.status_label.set_label(labels.get(state, state.title()))
+        self.status_stack.set_tooltip_text(
+            phase_tooltips.get(known_state, phase_tooltips["stopped"])
+        )
         running = state in {"waiting", "visible"}
         self.start_button.set_sensitive(not running)
         self.pause_button.set_sensitive(running)
@@ -148,13 +238,15 @@ class MainWindow(Gtk.ApplicationWindow):
         if not button.get_active() or not hasattr(self, "page_stack"):
             return
         self.page_stack.set_visible_child_name(name)
-        if name == "editor":
+        if name == "editor" and hasattr(self, "editor_page"):
+            self.editor_page.refresh_preview_context()
             self.editor_page.resume_preview()
         else:
-            self.editor_page.pause_preview()
-            if name == "timing":
+            if hasattr(self, "editor_page"):
+                self.editor_page.pause_preview()
+            if name == "timing" and hasattr(self, "timing_page"):
                 self.timing_page.refresh()
-            elif name == "displays":
+            elif name == "displays" and hasattr(self, "displays_page"):
                 self.displays_page.refresh()
 
     def _import_config(self, *_args) -> None:
@@ -229,11 +321,12 @@ class MainWindow(Gtk.ApplicationWindow):
             dialog.destroy()
 
     def _on_map(self, *_args) -> None:
-        if self.page_stack.get_visible_child_name() == "editor":
+        if hasattr(self, "page_stack") and self.page_stack.get_visible_child_name() == "editor":
             self.editor_page.resume_preview()
 
     def _on_close_request(self, *_args) -> bool:
-        self.editor_page.pause_preview()
+        if hasattr(self, "editor_page"):
+            self.editor_page.pause_preview()
         self.set_visible(False)
         return True
 

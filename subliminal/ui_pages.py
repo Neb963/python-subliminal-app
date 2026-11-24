@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from . import __version__
-from .gtk_runtime import Gtk
+from .gtk_runtime import Gtk, Pango
+from .ui_editor_widgets import EditorWidgetsMixin
 
 
 class TimingPage(Gtk.Box):
@@ -10,6 +11,7 @@ class TimingPage(Gtk.Box):
         self.controller = controller
         self._loading = False
         self.set_margin_top(24)
+        self.set_margin_bottom(24)
         self.set_margin_start(24)
         self.set_margin_end(24)
 
@@ -26,38 +28,69 @@ class TimingPage(Gtk.Box):
         intro.add_css_class("dim-label")
         self.append(intro)
 
-        grid = Gtk.Grid(column_spacing=16, row_spacing=12)
-        self.append(grid)
+        refresh_section = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=3,
+        )
+        refresh_label = Gtk.Label(label="Display refresh")
+        refresh_label.add_css_class("dim-label")
+        refresh_label.set_xalign(0.0)
+        refresh_section.append(refresh_label)
 
         self.refresh_value = Gtk.Label()
         self.refresh_value.set_xalign(0.0)
+        self.refresh_value.set_wrap(True)
+        self.refresh_value.set_max_width_chars(80)
+        refresh_section.append(self.refresh_value)
+        self.append(refresh_section)
+
+        controls = Gtk.Grid(column_spacing=12, row_spacing=4)
+        controls.set_column_homogeneous(True)
+        controls.set_halign(Gtk.Align.START)
+        controls.set_hexpand(False)
+        self.append(controls)
+
+        frames_label = Gtk.Label(label="Visible for")
+        frames_label.add_css_class("dim-label")
+        frames_label.set_xalign(0.0)
+        break_label = Gtk.Label(label="Break after flash")
+        break_label.add_css_class("dim-label")
+        break_label.set_xalign(0.0)
+        order_label = Gtk.Label(label="Scene order")
+        order_label.add_css_class("dim-label")
+        order_label.set_xalign(0.0)
+        controls.attach(frames_label, 0, 0, 1, 1)
+        controls.attach(break_label, 1, 0, 1, 1)
+        controls.attach(order_label, 2, 0, 1, 1)
+
+        self.visible_frames = Gtk.SpinButton.new_with_range(1, 120, 1)
+        self.visible_frames.set_width_chars(8)
         self.break_seconds = Gtk.SpinButton.new_with_range(0.1, 3600, 0.1)
         self.break_seconds.set_digits(1)
-        self.visible_frames = Gtk.SpinButton.new_with_range(1, 120, 1)
+        self.break_seconds.set_width_chars(10)
         self.selection = Gtk.DropDown.new_from_strings(["Random", "Sequential"])
+        controls.attach(self.visible_frames, 0, 1, 1, 1)
+        controls.attach(self.break_seconds, 1, 1, 1, 1)
+        controls.attach(self.selection, 2, 1, 1, 1)
 
-        self.break_seconds.connect("value-changed", self._changed)
-        self.visible_frames.connect("value-changed", self._changed)
-        self.selection.connect("notify::selected", self._changed)
-
-        self._attach(grid, 0, "Display refresh", self.refresh_value)
-        self._attach(grid, 1, "Visible for (frames)", self.visible_frames)
-        self._attach(grid, 2, "Break after flash (seconds)", self.break_seconds)
-        self._attach(grid, 3, "Scene order", self.selection)
+        units = Gtk.Label(
+            label="Frames are synchronized to the display. Break time is in seconds."
+        )
+        units.add_css_class("dim-label")
+        units.set_xalign(0.0)
+        units.set_wrap(True)
+        self.append(units)
 
         self.hint = Gtk.Label()
         self.hint.set_xalign(0.0)
         self.hint.set_wrap(True)
         self.hint.set_selectable(True)
         self.hint.add_css_class("dim-label")
-        grid.attach(self.hint, 0, 4, 2, 1)
+        self.append(self.hint)
 
-    @staticmethod
-    def _attach(grid, row, label, widget):
-        lab = Gtk.Label(label=label)
-        lab.set_xalign(1.0)
-        grid.attach(lab, 0, row, 1, 1)
-        grid.attach(widget, 1, row, 1, 1)
+        self.break_seconds.connect("value-changed", self._changed)
+        self.visible_frames.connect("value-changed", self._changed)
+        self.selection.connect("notify::selected", self._changed)
 
     def refresh(self) -> None:
         self._loading = True
@@ -128,6 +161,7 @@ class DisplaysPage(Gtk.Box):
         self.controller = controller
         self._loading = False
         self.set_margin_top(24)
+        self.set_margin_bottom(24)
         self.set_margin_start(24)
         self.set_margin_end(24)
 
@@ -135,6 +169,21 @@ class DisplaysPage(Gtk.Box):
         title.add_css_class("title-2")
         title.set_xalign(0.0)
         self.append(title)
+
+        intro = Gtk.Label(
+            label="Choose which connected displays receive the overlay."
+        )
+        intro.set_xalign(0.0)
+        intro.set_wrap(True)
+        intro.set_max_width_chars(80)
+        intro.add_css_class("dim-label")
+        self.append(intro)
+
+        mode_title = Gtk.Label(label="Target displays")
+        mode_title.add_css_class("heading")
+        mode_title.set_xalign(0.0)
+        mode_title.set_margin_top(4)
+        self.append(mode_title)
 
         self.all_radio = Gtk.CheckButton(label="All displays")
         self.selected_radio = Gtk.CheckButton(label="Selected displays")
@@ -148,7 +197,7 @@ class DisplaysPage(Gtk.Box):
             orientation=Gtk.Orientation.VERTICAL,
             spacing=6,
         )
-        self.monitor_box.set_margin_start(24)
+        self.monitor_box.set_margin_start(18)
         self.append(self.monitor_box)
 
         refresh = Gtk.Button(label="Refresh displays")
@@ -173,13 +222,15 @@ class DisplaysPage(Gtk.Box):
                 f", {info.refresh_hz:.1f} Hz"
                 if info.refresh_hz else ""
             )
-            check = Gtk.CheckButton(
-                label=(
-                    f"{info.connector} — {info.description} — "
-                    f"{info.width}×{info.height}, scale {info.scale_factor}×"
-                    f"{refresh}"
-                )
+            monitor_text = (
+                f"{info.connector} — {info.description} — "
+                f"{info.width}×{info.height}, scale {info.scale_factor}×"
+                f"{refresh}"
             )
+            check = Gtk.CheckButton(
+                label=EditorWidgetsMixin._short_name(monitor_text, 100)
+            )
+            check.set_tooltip_text(monitor_text)
             check.connector = info.connector
             check.set_active(info.connector in cfg.connectors)
             check.set_sensitive(cfg.mode == "selected")
@@ -214,6 +265,7 @@ class SettingsPage(Gtk.Box):
         self.controller = controller
         self._loading = False
         self.set_margin_top(24)
+        self.set_margin_bottom(24)
         self.set_margin_start(24)
         self.set_margin_end(24)
 
@@ -221,6 +273,12 @@ class SettingsPage(Gtk.Box):
         title.add_css_class("title-2")
         title.set_xalign(0.0)
         self.append(title)
+
+        startup_title = Gtk.Label(label="Startup")
+        startup_title.add_css_class("heading")
+        startup_title.set_xalign(0.0)
+        startup_title.set_margin_top(4)
+        self.append(startup_title)
 
         self.start_on_launch = Gtk.CheckButton(
             label="Start flashing automatically when the app launches"
@@ -241,9 +299,16 @@ class SettingsPage(Gtk.Box):
         )
         self.autostart_hint.set_wrap(True)
         self.autostart_hint.set_xalign(0.0)
+        self.autostart_hint.set_max_width_chars(80)
         self.autostart_hint.add_css_class("warning-banner")
         self.autostart_hint.set_visible(False)
         self.append(self.autostart_hint)
+
+        data_title = Gtk.Label(label="Application")
+        data_title.add_css_class("heading")
+        data_title.set_xalign(0.0)
+        data_title.set_margin_top(8)
+        self.append(data_title)
 
         version_label = Gtk.Label(label=f"Version: {__version__}")
         version_label.set_selectable(True)
@@ -251,11 +316,13 @@ class SettingsPage(Gtk.Box):
         version_label.add_css_class("dim-label")
         self.append(version_label)
 
-        cfg_label = Gtk.Label(
-            label=f"Configuration: {self.controller.store.path}"
-        )
+        cfg_text = f"Configuration: {self.controller.store.path}"
+        cfg_label = Gtk.Label(label=cfg_text)
         cfg_label.set_selectable(True)
         cfg_label.set_xalign(0.0)
+        cfg_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        cfg_label.set_max_width_chars(80)
+        cfg_label.set_tooltip_text(cfg_text)
         cfg_label.add_css_class("dim-label")
         self.append(cfg_label)
 
@@ -267,6 +334,7 @@ class SettingsPage(Gtk.Box):
         )
         export_note.set_wrap(True)
         export_note.set_xalign(0.0)
+        export_note.set_max_width_chars(80)
         export_note.add_css_class("dim-label")
         self.append(export_note)
 
