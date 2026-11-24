@@ -166,15 +166,42 @@ class TextLayerWidget(Gtk.Box):
             effective_px = max(0.05, effective_px * correction * 0.985)
             self._apply_font(effective_px)
 
+        # Pathological single lines can remain wider than the scene even at a
+        # tiny font because Pango still has a finite minimum glyph size. Preserve
+        # all content by enabling character fallback wrapping, then fit the wrapped
+        # block vertically as well.
         width, height = self._measure()
         if width > max_width or height > max_height:
-            text_w = max(1.0, width - pad2)
-            text_h = max(1.0, height - pad2)
-            correction = min(avail_w / text_w, avail_h / text_h, 1.0)
-            self._apply_font(max(0.01, effective_px * correction))
+            self.label.set_wrap(True)
+            self.label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            self._set_wrap_width(max_width)
             width, height = self._measure()
 
+            for _ in range(18):
+                if width <= max_width + 0.01 and height <= max_height + 0.01:
+                    break
+                text_w = max(1.0, width - pad2)
+                text_h = max(1.0, height - pad2)
+                correction = min(avail_w / text_w, avail_h / text_h, 0.96)
+                effective_px = max(0.01, self._effective_font_px * correction * 0.985)
+                self._apply_font(effective_px)
+                self._set_wrap_width(max_width)
+                width, height = self._measure()
+
         return min(width, max_width), min(height, max_height)
+
+    def _set_wrap_width(self, max_width: float) -> None:
+        usable = max(1.0, max_width - 2.0 * self._effective_padding)
+        approx_char_width = max(1.0, self._effective_font_px * 0.62)
+        chars = max(1, int(usable / approx_char_width))
+        self.label.set_max_width_chars(chars)
+
+        for _ in range(8):
+            width, _height = self._measure()
+            if width <= max_width + 0.01 or chars <= 1:
+                break
+            chars = max(1, int(chars * max_width / width * 0.95))
+            self.label.set_max_width_chars(chars)
 
     def _apply_font(self, pixel_size: float) -> None:
         self._effective_font_px = max(0.01, pixel_size)
