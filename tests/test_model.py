@@ -1,4 +1,9 @@
-from subliminal.model import config_from_dict, default_config
+from subliminal.model import (
+    _valid_color,
+    config_from_dict,
+    default_config,
+    normalize_config,
+)
 
 
 def test_config_round_trip_defaults_and_clamping() -> None:
@@ -117,3 +122,22 @@ def test_schema_4_migrates_to_schema_5() -> None:
     layer = cfg.scenes[0].layers[0]
     assert layer.alignment == "left"
     assert layer.background_enabled is False
+
+
+def test_valid_color_rejects_signs_spaces_and_underscores() -> None:
+    assert _valid_color("#AABBCC") is True
+    assert _valid_color("#112233ff") is True
+    for bad in ("#-12345", "#+12345", "# 12345", "#12_345", "#12345", "FFFFFF", None):
+        assert _valid_color(bad) is False
+
+
+def test_normalize_handles_non_finite_floats() -> None:
+    cfg = default_config()
+    layer = cfg.scenes[0].layers[0]
+    layer.opacity = float("nan")
+    layer.position.x = float("inf")
+    layer.position.y = float("-inf")
+    normalize_config(cfg)
+    assert layer.opacity == 0.65
+    assert layer.position.x == 0.5
+    assert layer.position.y == 0.5

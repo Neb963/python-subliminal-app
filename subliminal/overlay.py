@@ -11,6 +11,9 @@ from .render import SceneView
 
 LOG = logging.getLogger(__name__)
 
+PRE_MAP_WATCHDOG_MS = 2000
+MONITOR_SYNC_DEBOUNCE_MS = 150
+
 
 @dataclass(slots=True)
 class MonitorInfo:
@@ -30,9 +33,12 @@ def enumerate_monitors() -> list[MonitorInfo]:
         return []
     model = display.get_monitors()
     result: list[MonitorInfo] = []
+    seen_keys: set[str] = set()
     for index in range(model.get_n_items()):
         monitor = model.get_item(index)
         connector = monitor.get_connector() or f"monitor-{index + 1}"
+        key = connector if connector not in seen_keys else f"{connector}#{index + 1}"
+        seen_keys.add(key)
         manufacturer = monitor.get_manufacturer() or ""
         model_name = monitor.get_model() or ""
         description = " ".join(part for part in (manufacturer, model_name) if part).strip() or connector
@@ -40,12 +46,12 @@ def enumerate_monitors() -> list[MonitorInfo]:
         refresh_mhz = monitor.get_refresh_rate()
         result.append(
             MonitorInfo(
-                key=connector,
+                key=key,
                 connector=connector,
                 description=description,
                 width=geometry.width,
                 height=geometry.height,
-                scale_factor=monitor.get_scale_factor(),
+                scale_factor=max(1, int(monitor.get_scale_factor() or 1)),
                 refresh_hz=(refresh_mhz / 1000.0) if refresh_mhz > 0 else None,
                 monitor=monitor,
             )
@@ -71,11 +77,13 @@ class OverlayWindow:
         self._active: SceneView | None = None
         self._tick_id: int | None = None
         self._watchdog_id: int | None = None
+        self._begin_idle_id: int | None = None
+        self._flash_generation = 0
         self._target_frames = 1
         self._completed_frames = 0
         self._first_tick_seen = False
         self._done: Callable[[], None] | None = None
-        self._pending_flash: tuple[int, Callable[[], None]] | None = None
+        self._pending_flash: tuple[int, int, Callable[[], None]] | None = None
 
         LayerShell.init_for_window(self.window)
         LayerShell.set_namespace(self.window, "subliminal-overlay")
@@ -91,13 +99,22 @@ class OverlayWindow:
         ):
             LayerShell.set_anchor(self.window, edge, True)
 
+        self.window.connect("close-request", self._on_close_request)
         self.window.connect("realize", self._make_click_through)
         self.window.connect("map", self._on_mapped)
         self.window.connect("unmap", self._on_unmapped)
         self.rebuild([])
 
+    def update_monitor_info(self, info: MonitorInfo) -> None:
+        self.monitor_info = info
+        self.window.set_default_size(info.width, info.height)
+        LayerShell.set_monitor(self.window, info.monitor)
+
     def rebuild(self, scenes: list[Scene]) -> None:
         self.cancel_flash()
+        for old_view in self._views.values():
+            old_view.stop_animations()
+
         stack = Gtk.Stack()
         stack.set_hexpand(True)
         stack.set_vexpand(True)
@@ -107,10 +124,12 @@ class OverlayWindow:
         stack.add_named(blank, "__blank__")
 
         self._views = {}
+        device_scale = max(1, int(self.monitor_info.scale_factor or 1))
         for scene in scenes:
             view = SceneView(
                 scene,
                 self.media,
+                device_scale=device_scale,
                 render_limit=(
                     self.monitor_info.width,
                     self.monitor_info.height,
@@ -138,9 +157,11 @@ class OverlayWindow:
                 self.stack.set_visible_child_name("__blank__")
             return
 
+        device_scale = max(1, int(self.monitor_info.scale_factor or 1))
         view = SceneView(
             scene,
             self.media,
+            device_scale=device_scale,
             render_limit=(
                 self.monitor_info.width,
                 self.monitor_info.height,
@@ -159,6 +180,9 @@ class OverlayWindow:
             GLib.idle_add(self._invoke_once, done)
             return
 
+        self._flash_generation += 1
+        generation = self._flash_generation
+
         # Prepare the scene before mapping so KWin's first new surface buffer already
         # contains the flash contents. The actual frame counter starts from map.
         self.stack.set_visible_child_name(scene_id)
@@ -169,7 +193,14 @@ class OverlayWindow:
         self._target_frames = max(1, int(frames))
         self._completed_frames = 0
         self._first_tick_seen = False
-        self._pending_flash = (self._target_frames, done)
+        self._pending_flash = (generation, self._target_frames, done)
+        # Arm a pre-map watchdog so a monitor that never maps (e.g., DPMS off or
+        # lock screen) cannot leave the scheduler stuck in VISIBLE forever.
+        self._watchdog_id = GLib.timeout_add(
+            PRE_MAP_WATCHDOG_MS,
+            self._on_pre_map_watchdog,
+            generation,
+        )
         # Map invisibly first. The real allocation can differ from monitor
         # geometry under scaling; reveal only after the mapped layout is final.
         self.window.set_opacity(0.0)
@@ -184,10 +215,13 @@ class OverlayWindow:
         if self.window.get_mapped() and self._pending_flash is not None:
             pending = self._pending_flash
             self._pending_flash = None
-            GLib.idle_add(self._begin_mapped_flash, pending)
+            self._remove_begin_idle()
+            self._begin_idle_id = GLib.idle_add(self._begin_mapped_flash, pending)
 
     def cancel_flash(self) -> None:
+        self._flash_generation += 1
         self._pending_flash = None
+        self._remove_begin_idle()
         self._remove_tick()
         self._remove_watchdog()
         self._done = None
@@ -195,15 +229,29 @@ class OverlayWindow:
 
     def destroy(self) -> None:
         self.cancel_flash()
+        for view in self._views.values():
+            view.stop_animations()
+        self._views.clear()
         self.window.destroy()
 
-    def _begin_mapped_flash(self, pending: tuple[int, Callable[[], None]]) -> bool:
+    def _on_close_request(self, *_args) -> bool:
+        # Prevent external window close requests from destroying the overlay surface.
+        self.cancel_flash()
+        return True
+
+    def _begin_mapped_flash(self, pending: tuple[int, int, Callable[[], None]]) -> bool:
+        self._begin_idle_id = None
+        generation, frames, done = pending
+        if generation != self._flash_generation:
+            return GLib.SOURCE_REMOVE
         if not self.window.get_mapped():
-            # Mapping was lost before the idle callback. Treat it as cancelled.
-            GLib.idle_add(self._invoke_once, pending[1])
+            self._remove_watchdog()
+            self._hide_surface()
+            GLib.idle_add(self._invoke_once, done)
             return GLib.SOURCE_REMOVE
 
-        frames, done = pending
+        self._remove_tick()
+        self._remove_watchdog()
         self._target_frames = max(1, int(frames))
         self._completed_frames = 0
         self._first_tick_seen = False
@@ -229,7 +277,11 @@ class OverlayWindow:
         refresh = self.monitor_info.refresh_hz or 60.0
         expected_ms = (self._target_frames / refresh) * 1000.0
         watchdog_ms = max(1000, round(expected_ms * 10 + 500))
-        self._watchdog_id = GLib.timeout_add(watchdog_ms, self._on_watchdog)
+        self._watchdog_id = GLib.timeout_add(
+            watchdog_ms,
+            self._on_watchdog,
+            generation,
+        )
 
         LOG.debug(
             "Mapped flash on %s for %d frames (%.2f Hz)",
@@ -237,6 +289,22 @@ class OverlayWindow:
             self._target_frames,
             refresh,
         )
+        return GLib.SOURCE_REMOVE
+
+    def _on_pre_map_watchdog(self, generation: int) -> bool:
+        self._watchdog_id = None
+        if generation != self._flash_generation or self._pending_flash is None:
+            return GLib.SOURCE_REMOVE
+
+        LOG.warning(
+            "Pre-map watchdog fired on %s before surface mapped",
+            self.monitor_info.connector,
+        )
+        pending = self._pending_flash
+        self._pending_flash = None
+        self._remove_begin_idle()
+        self._hide_surface()
+        GLib.idle_add(self._invoke_once, pending[2])
         return GLib.SOURCE_REMOVE
 
     def _on_tick(self, _widget, _frame_clock) -> bool:
@@ -267,9 +335,9 @@ class OverlayWindow:
         GLib.idle_add(self._invoke_once, done)
         return GLib.SOURCE_REMOVE
 
-    def _on_watchdog(self) -> bool:
+    def _on_watchdog(self, generation: int) -> bool:
         self._watchdog_id = None
-        if self._done is None:
+        if generation != self._flash_generation or self._done is None:
             return GLib.SOURCE_REMOVE
 
         LOG.warning(
@@ -299,6 +367,14 @@ class OverlayWindow:
         # removes the surface from composition during every break.
         self.window.set_visible(False)
 
+    def _remove_begin_idle(self) -> None:
+        if self._begin_idle_id is not None:
+            try:
+                GLib.source_remove(self._begin_idle_id)
+            except Exception:
+                LOG.debug("Begin idle callback was already removed", exc_info=True)
+            self._begin_idle_id = None
+
     def _remove_tick(self) -> None:
         if self._tick_id is not None:
             try:
@@ -321,7 +397,8 @@ class OverlayWindow:
         if self._pending_flash is not None:
             pending = self._pending_flash
             self._pending_flash = None
-            GLib.idle_add(self._begin_mapped_flash, pending)
+            self._remove_begin_idle()
+            self._begin_idle_id = GLib.idle_add(self._begin_mapped_flash, pending)
 
     def _on_unmapped(self, *_args) -> None:
         LOG.debug("Overlay unmapped on %s", self.monitor_info.connector)
@@ -346,6 +423,8 @@ class OverlayManager:
         self.windows: dict[str, OverlayWindow] = {}
         self._monitor_model: Gio.ListModel | None = None
         self._monitors_handler: int | None = None
+        self._monitor_prop_handlers: list[tuple[object, int]] = []
+        self._sync_debounce_id: int | None = None
         self._presentation_generation = 0
         self._pending_windows: set[str] = set()
         self._presentation_done: Callable[[], None] | None = None
@@ -358,14 +437,22 @@ class OverlayManager:
             return False
 
     def start(self) -> None:
-        self.sync_monitors()
         display = Gdk.Display.get_default()
         if display is not None and self._monitor_model is None:
             self._monitor_model = display.get_monitors()
-            self._monitors_handler = self._monitor_model.connect("items-changed", self._on_monitors_changed)
+            self._monitors_handler = self._monitor_model.connect(
+                "items-changed",
+                self._on_monitors_changed,
+            )
+        if not self.windows:
+            self.sync_monitors()
 
     def stop(self) -> None:
         self.cancel_flash()
+        if self._sync_debounce_id is not None:
+            GLib.source_remove(self._sync_debounce_id)
+            self._sync_debounce_id = None
+        self._disconnect_monitor_props()
         for window in list(self.windows.values()):
             window.destroy()
         self.windows.clear()
@@ -386,14 +473,42 @@ class OverlayManager:
 
         for key in list(self.windows):
             if key not in wanted:
-                self._mark_window_finished(key)
                 self.windows.pop(key).destroy()
 
         for key, info in wanted.items():
-            if key not in self.windows:
+            existing = self.windows.get(key)
+            if existing is None:
                 self.windows[key] = OverlayWindow(self.application, info, self.media)
+            elif (
+                existing.monitor_info.width != info.width
+                or existing.monitor_info.height != info.height
+                or existing.monitor_info.scale_factor != info.scale_factor
+                or existing.monitor_info.refresh_hz != info.refresh_hz
+                or existing.monitor_info.monitor is not info.monitor
+            ):
+                existing.update_monitor_info(info)
 
+        self._watch_monitor_props(infos)
         self.rebuild_scenes()
+
+    def _disconnect_monitor_props(self) -> None:
+        for monitor, handler_id in self._monitor_prop_handlers:
+            try:
+                monitor.disconnect(handler_id)
+            except Exception:
+                pass
+        self._monitor_prop_handlers.clear()
+
+    def _watch_monitor_props(self, infos: list[MonitorInfo]) -> None:
+        self._disconnect_monitor_props()
+        for info in infos:
+            monitor = info.monitor
+            for signal in ("notify::geometry", "notify::scale-factor", "notify::refresh-rate"):
+                try:
+                    handler_id = monitor.connect(signal, self._on_monitors_changed)
+                    self._monitor_prop_handlers.append((monitor, handler_id))
+                except Exception:
+                    LOG.debug("Could not connect %s on monitor %s", signal, info.connector)
 
     def rebuild_scenes(self) -> None:
         self._abort_presentation(notify=True)
@@ -467,9 +582,15 @@ class OverlayManager:
         GLib.idle_add(self._invoke_once, done)
 
     def _on_monitors_changed(self, *_args) -> None:
-        GLib.idle_add(self._sync_after_change)
+        if self._sync_debounce_id is not None:
+            GLib.source_remove(self._sync_debounce_id)
+        self._sync_debounce_id = GLib.timeout_add(
+            MONITOR_SYNC_DEBOUNCE_MS,
+            self._sync_after_change,
+        )
 
     def _sync_after_change(self) -> bool:
+        self._sync_debounce_id = None
         self.sync_monitors()
         return GLib.SOURCE_REMOVE
 

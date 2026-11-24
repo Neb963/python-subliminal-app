@@ -48,6 +48,7 @@ class AppController:
         self._overlay_rebuild_timer: int | None = None
         self._overlay_full_dirty = False
         self._overlay_dirty_scenes: set[str] = set()
+        self._shutting_down = False
         self.scheduler = Scheduler(
             lambda: self.config,
             self.overlay.flash_scene,
@@ -66,12 +67,23 @@ class AppController:
                 )
         return self.window
 
+    def _prepare_overlay_for_presentation(self) -> None:
+        had_windows = bool(self.overlay.windows)
+        self.overlay.start()
+        if not had_windows:
+            # overlay.start() just built all scenes fresh from current config.
+            self._cancel_overlay_rebuild_timer()
+            self._clear_overlay_dirty()
+        elif self._overlay_full_dirty or self._overlay_dirty_scenes:
+            self._cancel_overlay_rebuild_timer()
+            self._try_overlay_rebuild()
+
     def start(self) -> None:
         if not self.overlay.supported():
             self.warn("Cannot start: layer-shell is unavailable. Log into KDE Plasma (Wayland), not X11/GNOME.")
             return
         normalize_config(self.config)
-        self.overlay.start()
+        self._prepare_overlay_for_presentation()
         self.scheduler.start(immediate=False)
 
     def pause(self) -> None:
@@ -84,7 +96,7 @@ class AppController:
         if not self.overlay.supported():
             self.warn("Cannot test: layer-shell is unavailable in this session.")
             return
-        self.overlay.start()
+        self._prepare_overlay_for_presentation()
         self.scheduler.test_flash(scene)
 
     def config_changed(
@@ -108,12 +120,18 @@ class AppController:
             was_running = self.scheduler.running
             if was_running:
                 self.scheduler.pause()
+            self._cancel_overlay_rebuild_timer()
             self._clear_overlay_dirty()
             self.overlay.sync_monitors()
             if was_running:
                 self.scheduler.start(immediate=False)
         elif kind == "timing" and self.scheduler.running:
             self.scheduler.reload_config()
+
+    def _cancel_overlay_rebuild_timer(self) -> None:
+        if self._overlay_rebuild_timer is not None:
+            GLib.source_remove(self._overlay_rebuild_timer)
+            self._overlay_rebuild_timer = None
 
     def _schedule_overlay_rebuild(self) -> None:
         if not self.overlay.windows:
@@ -133,6 +151,9 @@ class AppController:
 
         full_dirty = self._overlay_full_dirty
         dirty_scenes = set(self._overlay_dirty_scenes)
+        self._clear_overlay_dirty()
+        self._overlay_rebuild_timer = None
+
         try:
             if full_dirty:
                 self.overlay.rebuild_scenes()
@@ -145,9 +166,7 @@ class AppController:
                 self.overlay.rebuild_scenes()
             except Exception:
                 LOG.exception("Full overlay rebuild also failed")
-        finally:
-            self._clear_overlay_dirty()
-            self._overlay_rebuild_timer = None
+                self._overlay_full_dirty = True
         return GLib.SOURCE_REMOVE
 
     def _clear_overlay_dirty(self) -> None:
@@ -163,16 +182,20 @@ class AppController:
         if was_running:
             self.scheduler.pause()
         self.overlay.cancel_flash()
+        self._cancel_overlay_rebuild_timer()
         self._clear_overlay_dirty()
+        if self._save_timer is not None:
+            GLib.source_remove(self._save_timer)
+            self._save_timer = None
         self.config = imported
         self.store.save(self.config)
+        self.clear_warning()
         self.set_autostart(self.config.autostart)
         if self.overlay.windows:
             # sync_monitors() also rebuilds scene views for the imported config.
             self.overlay.sync_monitors()
         if self.window is not None:
             self.window.refresh_all()
-            self.window.show_warning(None)
         if was_running:
             self.scheduler.start(immediate=False)
 
@@ -199,15 +222,14 @@ class AppController:
         self.store.save(self.config)
 
     def quit(self) -> None:
-        self.save_now()
-        self.scheduler.stop()
-        self.overlay.stop()
+        self.shutdown()
         self.application.quit()
 
     def shutdown(self) -> None:
-        if self._overlay_rebuild_timer is not None:
-            GLib.source_remove(self._overlay_rebuild_timer)
-            self._overlay_rebuild_timer = None
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        self._cancel_overlay_rebuild_timer()
         try:
             self.save_now()
         except Exception:
@@ -268,11 +290,15 @@ class SubliminalApplication(Gtk.Application):
         window = self.controller.ensure_window()
         if self.controller.config.start_on_launch and self._first_activation:
             GLib.idle_add(self._start_after_activation)
+        elif self.background and self._first_activation:
+            LOG.info(
+                "Launched with --background while start_on_launch is disabled; "
+                "re-run 'subliminal' to open the configuration window."
+            )
         should_present = not (self.background and self._first_activation)
         self._first_activation = False
         if should_present:
             window.present()
-            self.controller.clear_warning()
 
     def do_shutdown(self) -> None:
         if self.controller is not None:

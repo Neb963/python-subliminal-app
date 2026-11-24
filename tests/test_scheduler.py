@@ -105,3 +105,52 @@ def test_pause_cancels_active_frame_presentation() -> None:
     scheduler.pause()
     assert scheduler.state == SchedulerState.PAUSED
     assert presenter.done is None
+
+
+def test_test_flash_does_not_count_as_running_and_restores_stopped() -> None:
+    cfg = default_config()
+    timers = FakeTimers()
+    presenter = FakePresenter()
+    scheduler = Scheduler(
+        lambda: cfg,
+        presenter.present,
+        presenter.cancel,
+        timers.add,
+        timers.remove,
+    )
+    assert scheduler.state == SchedulerState.STOPPED
+    scheduler.test_flash()
+    assert scheduler.state == SchedulerState.VISIBLE
+    assert scheduler.testing is True
+    assert scheduler.running is False
+
+    # Timing/config reload during a test flash must not start continuous scheduling.
+    scheduler.reload_config()
+    assert scheduler.state == SchedulerState.VISIBLE
+    assert scheduler.running is False
+    assert not timers.callbacks
+
+    presenter.finish()
+    assert scheduler.testing is False
+    assert scheduler.state == SchedulerState.STOPPED
+
+
+def test_test_flash_restores_paused_when_triggered_from_paused() -> None:
+    cfg = default_config()
+    timers = FakeTimers()
+    presenter = FakePresenter()
+    scheduler = Scheduler(
+        lambda: cfg,
+        presenter.present,
+        presenter.cancel,
+        timers.add,
+        timers.remove,
+    )
+    scheduler.start()
+    scheduler.pause()
+    assert scheduler.state == SchedulerState.PAUSED
+
+    scheduler.test_flash()
+    assert scheduler.running is False
+    presenter.finish()
+    assert scheduler.state == SchedulerState.PAUSED
