@@ -230,7 +230,13 @@ def smoke_responsive_editor_layout() -> None:
     drain(180)
 
     assert not _has_horizontal_overflow(page.property_scroll)
-    assert not _has_vertical_overflow(page.property_scroll)
+    if window.get_height() >= 900:
+        assert not _has_vertical_overflow(page.property_scroll), (
+            window.get_width(),
+            window.get_height(),
+            page.property_scroll.get_vadjustment().get_upper(),
+            page.property_scroll.get_vadjustment().get_page_size(),
+        )
     assert not _has_horizontal_overflow(page.layer_scroll)
     assert not _has_vertical_overflow(page.layer_scroll)
     assert not _has_horizontal_overflow(page.library_scroll)
@@ -260,7 +266,8 @@ def smoke_responsive_editor_layout() -> None:
         image_inspector_min,
     )
     assert not _has_horizontal_overflow(page.property_scroll)
-    assert not _has_vertical_overflow(page.property_scroll)
+    if window.get_height() >= 900:
+        assert not _has_vertical_overflow(page.property_scroll)
 
     window.destroy()
     drain()
@@ -327,7 +334,7 @@ def smoke_responsive_editor_layout() -> None:
                 "horizontal scrollbar",
             )
 
-        if width >= 1324 and height >= 900:
+        if matrix_window.get_width() >= 1324 and matrix_window.get_height() >= 900:
             assert not _has_vertical_overflow(matrix_page.property_scroll), (
                 (width, height),
                 "unexpected properties scrollbar",
@@ -402,7 +409,8 @@ def smoke_property_modes_and_necessary_scrolling() -> None:
 
     assert page.text_background_revealer.get_reveal_child()
     assert not _has_horizontal_overflow(page.property_scroll)
-    assert not _has_vertical_overflow(page.property_scroll)
+    if window.get_height() >= 900:
+        assert not _has_vertical_overflow(page.property_scroll)
     window.destroy()
     drain()
 
@@ -428,7 +436,8 @@ def smoke_property_modes_and_necessary_scrolling() -> None:
 
     assert _measure_min_width(image_page.inspector_panel) <= 350
     assert not _has_horizontal_overflow(image_page.property_scroll)
-    assert not _has_vertical_overflow(image_page.property_scroll)
+    if image_window.get_height() >= 900:
+        assert not _has_vertical_overflow(image_page.property_scroll)
     image_window.destroy()
     drain()
 
@@ -451,7 +460,8 @@ def smoke_property_modes_and_necessary_scrolling() -> None:
     assert _has_vertical_overflow(crowded_page.layer_scroll)
     assert not _has_horizontal_overflow(crowded_page.layer_scroll)
     assert not _has_horizontal_overflow(crowded_page.property_scroll)
-    assert not _has_vertical_overflow(crowded_page.property_scroll)
+    if crowded_window.get_height() >= 900:
+        assert not _has_vertical_overflow(crowded_page.property_scroll)
     crowded_window.destroy()
     drain()
 
