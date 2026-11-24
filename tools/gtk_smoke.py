@@ -12,6 +12,7 @@ gi.require_version("Graphene", "1.0")
 from gi.repository import Graphene
 
 from subliminal.gtk_runtime import Gdk, GLib, Gtk, Pango
+from subliminal.layout import rects_overlap
 from subliminal.media import MediaCache
 from subliminal.model import (
     Folder,
@@ -694,6 +695,11 @@ def smoke_long_text_containment() -> None:
             child_h = child.get_height()
             assert x >= -0.01
             assert y >= -0.01
+            assert child_w >= 20, (
+                rendered.model.name,
+                "wrapped child collapsed",
+                child_w,
+            )
             assert child_w <= width + 0.01, (
                 rendered.model.name,
                 "child width",
@@ -923,6 +929,120 @@ def smoke_layout_allocations() -> None:
         drain()
 
 
+def smoke_editor_long_text_no_pane_clipping() -> None:
+    """Regression test: long multiline text inside EditorPage must never inflate
+    SceneView/AspectFrame, slide canvas_panel under Library, clip canvas_header,
+    clip preview text, or overlap two randomized layers when space permits."""
+    controller = FakeController()
+    controller.overlay.monitors = lambda: [
+        SimpleNamespace(
+            connector="eDP-1",
+            description="HiDPI Laptop",
+            width=1536,
+            height=864,
+            scale_factor=1,
+            refresh_hz=60.0,
+        )
+    ]
+    controller.config.scenes[0].layers = [
+        TextLayer(
+            name="Long Affirmation A",
+            text=(
+                "I retain and cultivate my essence with complete clarity and focus.\n"
+                "I retain and cultivate my strength across every moment of the day.\n"
+                "My essence by itself burns all impurities and disharmonies within all my bodies."
+            ),
+            font_size_px=40,
+            color="#E01B24FF",
+            position=Position(randomize=True),
+        ),
+        TextLayer(
+            name="Long Affirmation B",
+            text=(
+                "Discipline alone surely bestows full liberation and calm.\n"
+                "Discipline alone surely bestows all creative clarity.\n"
+                "Discipline alone surely purifies all habits on all levels."
+            ),
+            font_size_px=40,
+            color="#E01B24FF",
+            position=Position(randomize=True),
+        ),
+    ]
+
+    app = Gtk.Application(application_id="io.github.subliminal.PaneClipSmoke")
+    app.register()
+
+    for win_w, win_h in ((1000, 650), (1536, 864)):
+        window = MainWindow(app, controller)
+        window.set_default_size(win_w, win_h)
+        window.present()
+        drain(260)
+
+        page = window.editor_page
+        view = page._preview_view
+        assert view is not None
+        assert _measure_min_width(view) == 0, (
+            "SceneView must not propagate child min width",
+            _measure_min_width(view),
+        )
+
+        # Verify canvas_panel is never shifted negative under library_panel.
+        origin = Graphene.Point().init(0.0, 0.0)
+        ok_lib, lib_pt = page.library_panel.compute_point(window, origin)
+        ok_can, can_pt = page.canvas_panel.compute_point(window, origin)
+        assert ok_lib and ok_can
+        assert can_pt.x >= lib_pt.x + page.library_panel.get_width() - 1.0, (
+            (win_w, win_h),
+            "canvas shifted under library",
+            lib_pt.x,
+            page.library_panel.get_width(),
+            can_pt.x,
+        )
+
+        for name, control in (
+            ("scene label", page.scene_label),
+            ("scene enabled", page.scene_enabled),
+            ("preview info", page.preview_info),
+            ("folder label", page.folder_label),
+            ("folder selector", page.scene_folder),
+            ("reroll", page.reroll_button),
+            ("preview frame", page.preview_frame),
+        ):
+            _assert_inside(control, page.canvas_panel, label=f"pane-clip {win_w}x{win_h} {name}")
+            _assert_inside(control, window, label=f"pane-clip-win {win_w}x{win_h} {name}")
+
+        # Reroll 15 times and verify zero out-of-bounds cutoffs and zero overlap.
+        for _ in range(15):
+            page._refresh_preview()
+            drain(40)
+            view = page._preview_view
+            assert view is not None
+            vw = view.get_width()
+            vh = view.get_height()
+            assert vw > 100 and vh > 60
+            rects = []
+            for rendered in view._layers:
+                child = rendered.widget
+                x, y = view.get_child_position(child)
+                cw = child.get_width()
+                ch = child.get_height()
+                assert x >= -0.01, (rendered.model.name, x, y, cw, ch, vw, vh)
+                assert y >= -0.01, (rendered.model.name, x, y, cw, ch, vw, vh)
+                assert x + cw <= vw + 0.01, (rendered.model.name, x, cw, vw)
+                assert y + ch <= vh + 0.01, (rendered.model.name, y, ch, vh)
+                rects.append((x, y, float(cw), float(ch)))
+            assert len(rects) == 2
+            assert not rects_overlap(rects[0], rects[1], 0.0), (
+                (win_w, win_h),
+                "layers overlapped in preview",
+                rects,
+                (vw, vh),
+            )
+
+        window.destroy()
+        drain()
+
+
 def main() -> None:
     Gtk.init()
     smoke_editor_reentrancy()
@@ -932,6 +1052,7 @@ def main() -> None:
     smoke_navigation_page_isolation()
     smoke_toolbar_stability()
     smoke_long_text_containment()
+    smoke_editor_long_text_no_pane_clipping()
     smoke_larger_ui_font_layout()
     smoke_layout_allocations()
     print("GTK smoke checks passed")

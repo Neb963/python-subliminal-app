@@ -50,12 +50,14 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         self.right_paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
         self.outer_paned.set_end_child(self.right_paned)
         self.outer_paned.set_resize_end_child(True)
+        self.outer_paned.set_shrink_end_child(False)
 
         self.canvas_panel = self._build_canvas()
         self.inspector_panel = self._build_inspector()
         self.right_paned.set_start_child(self.canvas_panel)
         self.right_paned.set_end_child(self.inspector_panel)
         self.right_paned.set_resize_start_child(True)
+        self.right_paned.set_shrink_start_child(False)
         self.right_paned.set_resize_end_child(False)
         self.right_paned.set_shrink_end_child(False)
 
@@ -877,10 +879,12 @@ class EditorPage(Gtk.Box, EditorWidgetsMixin):
         preview_width = self.preview_frame.get_width()
         preview_height = self.preview_frame.get_height()
         if preview_width > 10 and preview_height > 10:
+            inner_width = max(1, preview_width - 2)
+            inner_height = max(1, preview_height - 2)
             preview_scale = min(
                 1.0,
-                preview_width / target_width,
-                preview_height / target_height,
+                inner_width / target_width,
+                inner_height / target_height,
             )
             self._preview_used_fallback_scale = False
         else:
