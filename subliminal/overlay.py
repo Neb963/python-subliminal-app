@@ -116,6 +116,9 @@ class OverlayWindow:
             old_view.stop_animations()
 
         stack = Gtk.Stack()
+        stack.set_hhomogeneous(False)
+        stack.set_vhomogeneous(False)
+        stack.set_overflow(Gtk.Overflow.HIDDEN)
         stack.set_hexpand(True)
         stack.set_vexpand(True)
 

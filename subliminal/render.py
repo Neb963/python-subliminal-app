@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 from dataclasses import dataclass
 
@@ -18,7 +19,7 @@ from .model import ImageLayer, Layer, Scene, TextLayer
 
 LOG = logging.getLogger(__name__)
 
-RANDOM_CANDIDATES = 64
+RANDOM_CANDIDATES = 128
 RANDOM_SPACING_PX = 16.0
 SAFE_MARGIN_PX = 12.0
 
@@ -136,7 +137,9 @@ class TextLayerWidget(Gtk.Box):
         self._set_effective_padding(min(requested_padding, max_padding))
 
         base_px = max(0.1, self.layer.font_size_px * self.scale)
+        self.set_size_request(-1, -1)
         self.label.set_wrap(False)
+        self.label.set_width_chars(-1)
         self.label.set_max_width_chars(-1)
         self._apply_font(base_px)
         width, height = self._measure()
@@ -188,7 +191,14 @@ class TextLayerWidget(Gtk.Box):
                 self._set_wrap_width(max_width)
                 width, height = self._measure()
 
-        return min(width, max_width), min(height, max_height)
+        if self.label.get_wrap():
+            final_w = max(1, min(math.floor(max_width), math.ceil(width)))
+            _, wrapped_h, _, _ = self.measure(Gtk.Orientation.VERTICAL, final_w)
+            final_h = max(1, min(math.floor(max_height), math.ceil(wrapped_h)))
+            self.set_size_request(final_w, final_h)
+            return float(final_w), float(final_h)
+
+        return min(float(math.ceil(width)), max_width), min(float(math.ceil(height)), max_height)
 
     def _set_wrap_width(self, max_width: float) -> None:
         usable = max(1.0, max_width - 2.0 * self._effective_padding)
@@ -339,6 +349,17 @@ class SceneView(Gtk.Fixed):
         self.connect("notify::height", self._on_size_changed)
         self.connect("unmap", self._on_teardown)
         self._build()
+
+    def do_measure(
+        self,
+        orientation: Gtk.Orientation,
+        for_size: int,
+    ) -> tuple[int, int, int, int]:
+        # SceneView is strictly viewport-bound: its size is dictated top-down
+        # by the editor preview frame or live monitor surface, never bottom-up
+        # by layer children. Returning (0, 0) prevents long text or large images
+        # from inflating Gtk.AspectFrame / Gtk.Paned and clipping the canvas.
+        return 0, 0, -1, -1
 
     def prepare_flash(self, width: float, height: float) -> None:
         self._reroll_random_candidates()
@@ -499,6 +520,8 @@ class SceneView(Gtk.Fixed):
                 target_bounds.width,
                 target_bounds.height,
             )
+            item_w = min(target_bounds.width, float(math.ceil(item_w)))
+            item_h = min(target_bounds.height, float(math.ceil(item_h)))
             measured.append((rendered, item_w, item_h))
 
         occupied: list[RectTuple] = []
@@ -524,9 +547,15 @@ class SceneView(Gtk.Fixed):
             occupied.append((x, y, item_w, item_h))
 
         spacing = max(4.0, RANDOM_SPACING_PX * self.scale)
-        for rendered, item_w, item_h in measured:
-            if not rendered.model.position.randomize:
-                continue
+        random_items = [
+            (index, rendered, item_w, item_h)
+            for index, (rendered, item_w, item_h) in enumerate(measured)
+            if rendered.model.position.randomize
+        ]
+        # Place larger randomized layers first so big text blocks land cleanly
+        # before smaller layers fill the remaining free space.
+        random_items.sort(key=lambda entry: (-(entry[2] * entry[3]), entry[0]))
+        for _index, rendered, item_w, item_h in random_items:
             candidates = self._random_candidates.get(rendered.model.id)
             if not candidates:
                 candidates = [(0.5, 0.5)]

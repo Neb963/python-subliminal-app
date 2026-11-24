@@ -164,28 +164,65 @@ def choose_random_position(
     *,
     spacing: float = 16.0,
 ) -> tuple[float, float]:
-    """First collision-free candidate; least-overlap fallback if impossible."""
+    """First collision-free candidate; structured free-strip probes; least-visual-overlap fallback."""
     item_w = min(max(1.0, _finite(item_width, 1.0)), bounds.width)
     item_h = min(max(1.0, _finite(item_height, 1.0)), bounds.height)
+    gap = max(0.0, _finite(spacing, 0.0))
     samples = candidates or [(0.5, 0.5)]
-    evaluated: list[tuple[float, float, float]] = []
+    evaluated: list[tuple[float, float, float, float]] = []
+
+    def evaluate_point(x: float, y: float) -> bool:
+        cx, cy = clamp_top_left(x, y, item_w, item_h, bounds)
+        rect = (cx, cy, item_w, item_h)
+        collisions = [
+            other for other in occupied
+            if rects_overlap(rect, other, gap)
+        ]
+        if not collisions:
+            evaluated.append((0.0, 0.0, cx, cy))
+            return True
+        visual_overlap = sum(
+            _visual_overlap_area(rect, other)
+            for other in collisions
+        )
+        spacing_overlap = sum(
+            _intersection_area(rect, other, gap)
+            for other in collisions
+        )
+        evaluated.append((visual_overlap, spacing_overlap, cx, cy))
+        return False
 
     for rx, ry in samples:
         x, y = random_top_left(bounds, item_w, item_h, rx, ry)
-        rect = (x, y, item_w, item_h)
-        collisions = [
-            other for other in occupied
-            if rects_overlap(rect, other, spacing)
-        ]
-        if not collisions:
-            return x, y
-        overlap = sum(
-            _intersection_area(rect, other, spacing)
-            for other in collisions
-        )
-        evaluated.append((overlap, x, y))
+        if evaluate_point(x, y):
+            return evaluated[-1][2], evaluated[-1][3]
 
-    _, best_x, best_y = min(evaluated, key=lambda item: item[0])
+    # When uniform random samples all collide (e.g., two large text blocks),
+    # probe structured positions around occupied strips and a coarse grid so
+    # any physically valid non-overlapping slot is deterministically found.
+    if occupied:
+        seed_rx = min(1.0, max(0.0, _finite(samples[0][0], 0.5)))
+        seed_ry = min(1.0, max(0.0, _finite(samples[0][1], 0.5)))
+        base_x, base_y = random_top_left(bounds, item_w, item_h, seed_rx, seed_ry)
+        structured_points: list[tuple[float, float]] = []
+        for ox, oy, ow, oh in occupied:
+            for pad in (gap, 0.0):
+                structured_points.append((base_x, oy - item_h - pad))
+                structured_points.append((base_x, oy + oh + pad))
+                structured_points.append((ox - item_w - pad, base_y))
+                structured_points.append((ox + ow + pad, base_y))
+        for gx in (0.0, 0.25, 0.5, 0.75, 1.0):
+            for gy in (0.0, 0.25, 0.5, 0.75, 1.0):
+                structured_points.append(
+                    random_top_left(bounds, item_w, item_h, gx, gy)
+                )
+        for px, py in structured_points:
+            if evaluate_point(px, py):
+                return evaluated[-1][2], evaluated[-1][3]
+
+    # Lexicographic ranking: zero actual visual overlap strictly beats any
+    # visual overlap, even if spacing margin is tighter than requested.
+    _, _, best_x, best_y = min(evaluated, key=lambda item: (item[0], item[1]))
     return best_x, best_y
 
 
@@ -204,6 +241,16 @@ def rect_within_bounds(
     )
 
 
+def _visual_overlap_area(a: RectTuple, b: RectTuple) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    left = max(ax, bx)
+    top = max(ay, by)
+    right = min(ax + aw, bx + bw)
+    bottom = min(ay + ah, by + bh)
+    return max(0.0, right - left) * max(0.0, bottom - top)
+
+
 def _intersection_area(
     a: RectTuple,
     b: RectTuple,
@@ -211,11 +258,11 @@ def _intersection_area(
 ) -> float:
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
-    gap = max(0.0, spacing)
-    left = max(ax, bx)
-    top = max(ay, by)
-    right = min(ax + aw + gap, bx + bw + gap)
-    bottom = min(ay + ah + gap, by + bh + gap)
+    half = max(0.0, spacing) * 0.5
+    left = max(ax - half, bx - half)
+    top = max(ay - half, by - half)
+    right = min(ax + aw + half, bx + bw + half)
+    bottom = min(ay + ah + half, by + bh + half)
     return max(0.0, right - left) * max(0.0, bottom - top)
 
 

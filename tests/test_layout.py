@@ -94,3 +94,39 @@ def test_tiny_container_still_produces_valid_bounds() -> None:
     width, height, _ = fit_dimensions(100, 100, bounds)
     x, y = fixed_top_left(Position(), width, height, bounds)
     assert rect_within_bounds((x, y, width, height), bounds)
+
+
+def test_random_structured_fallback_finds_free_strip() -> None:
+    bounds = safe_rect(1000, 600, 10)
+    # Large occupied block in the middle; all random samples land inside it.
+    occupied = [(10, 200, 980, 180)]
+    candidates = [(0.5, 0.5)] * 32
+    x, y = choose_random_position(
+        bounds,
+        900,
+        120,
+        candidates,
+        occupied,
+        spacing=16,
+    )
+    rect = (x, y, 900, 120)
+    assert rect_within_bounds(rect, bounds)
+    # Must land cleanly above or below the occupied strip with zero overlap.
+    assert (y + 120 <= 200) or (y >= 380), rect
+
+
+def test_random_prefers_zero_visual_overlap_over_spacing_violation() -> None:
+    bounds = safe_rect(400, 200, 0)
+    # Occupied takes top 100px; item is 96px tall.
+    # Full 16px spacing is impossible (100 + 16 + 96 = 212 > 200),
+    # but zero visual overlap IS possible (y = 104, 4px gap).
+    occupied = [(0, 0, 400, 100)]
+    x, y = choose_random_position(
+        bounds,
+        400,
+        96,
+        [(0.0, 0.0), (0.0, 0.5)],
+        occupied,
+        spacing=16,
+    )
+    assert y >= 100, (x, y)
